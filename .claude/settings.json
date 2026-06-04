@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m py_compile 03d_advanced_reflection.py 11_ensemble.py score_log.py 06b_evaluate_methods.py config.py)",
+      "Bash(.venv/bin/python -m py_compile 03d_advanced_reflection.py)",
+      "Bash(.venv/bin/python -m py_compile 11_ensemble.py config.py)"
+    ]
+  }
+}

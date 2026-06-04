@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reflexive KG — POC Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --surface2: #181c24;
+    --border: #232838;
+    --accent: #4fffb0;
+    --accent2: #7c6dfa;
+    --accent3: #ff6b6b;
+    --accent4: #ffd166;
+    --text: #e8eaf0;
+    --muted: #6b7280;
+    --mono: 'Space Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10,12,16,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; gap: 2rem;
+    height: 56px;
+  }
+  .nav-logo { font-family: var(--mono); font-size: .75rem; color: var(--accent); letter-spacing: .1em; }
+  .nav-links { display: flex; gap: 1.5rem; margin-left: auto; }
+  .nav-links a { font-size: .8rem; color: var(--muted); text-decoration: none; letter-spacing: .05em; transition: color .2s; }
+  .nav-links a:hover { color: var(--accent); }
+
+  /* ── HERO ── */
+  .hero {
+    padding: 6rem 4rem 4rem;
+    max-width: 1200px; margin: 0 auto;
+    position: relative;
+  }
+  .hero-label {
+    font-family: var(--mono); font-size: .7rem; color: var(--accent);
+    letter-spacing: .15em; text-transform: uppercase;
+    border: 1px solid rgba(79,255,176,.25); display: inline-block;
+    padding: .3rem .8rem; border-radius: 2px; margin-bottom: 1.5rem;
+  }
+  .hero h1 {
+    font-size: clamp(2.5rem, 5vw, 4.5rem); font-weight: 800;
+    line-height: 1.05; letter-spacing: -.02em;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero-sub {
+    max-width: 640px; color: var(--muted); font-size: 1.05rem;
+    margin-top: 1.2rem; line-height: 1.7;
+  }
+  .hero-grid {
+    display: grid; grid-template-columns: repeat(4,1fr); gap: 1px;
+    background: var(--border); margin-top: 3rem;
+    border: 1px solid var(--border);
+  }
+  .hero-stat {
+    background: var(--surface); padding: 1.5rem;
+    display: flex; flex-direction: column; gap: .3rem;
+  }
+  .hero-stat .num { font-size: 2rem; font-weight: 800; color: var(--accent); }
+  .hero-stat .label { font-size: .75rem; color: var(--muted); letter-spacing: .05em; }
+
+  /* ── SECTION ── */
+  section {
+    max-width: 1200px; margin: 0 auto;
+    padding: 4rem 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .section-label {
+    font-family: var(--mono); font-size: .65rem; color: var(--accent2);
+    letter-spacing: .15em; text-transform: uppercase; margin-bottom: .8rem;
+  }
+  h2 {
+    font-size: 1.8rem; font-weight: 700; letter-spacing: -.01em;
+    margin-bottom: 2rem;
+  }
+  h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: .8rem; }
+  p { color: #9ca3af; font-size: .93rem; line-height: 1.75; }
+
+  /* ── PHASE TIMELINE ── */
+  .phases { display: flex; flex-direction: column; gap: 0; }
+  .phase {
+    display: grid; grid-template-columns: 180px 1fr;
+    position: relative;
+  }
+  .phase::before {
+    content: '';
+    position: absolute; left: 89px; top: 48px; bottom: -1px;
+    width: 2px; background: var(--border);
+  }
+  .phase:last-child::before { display: none; }
+  .phase-left {
+    padding: 2rem 1.5rem 2rem 0;
+    display: flex; flex-direction: column; align-items: flex-end; gap: .4rem;
+  }
+  .phase-dot {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: var(--bg); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    position: relative; z-index: 1;
+    margin-right: -9px;
+  }
+  .phase-dot.warn { border-color: var(--accent4); }
+  .phase-dot.info { border-color: var(--accent2); }
+  .phase-dot-inner { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .phase-dot.warn .phase-dot-inner { background: var(--accent4); }
+  .phase-dot.info .phase-dot-inner { background: var(--accent2); }
+  .phase-week { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+  .phase-right {
+    border-left: 2px solid var(--border);
+    padding: 2rem 0 2rem 2rem;
+  }
+  .phase-tag {
+    font-family: var(--mono); font-size: .65rem; letter-spacing: .1em;
+    padding: .2rem .6rem; border-radius: 2px; margin-bottom: .6rem;
+    display: inline-block;
+  }
+  .tag-green { background: rgba(79,255,176,.1); color: var(--accent); border: 1px solid rgba(79,255,176,.25); }
+  .tag-yellow { background: rgba(255,209,102,.1); color: var(--accent4); border: 1px solid rgba(255,209,102,.25); }
+  .tag-purple { background: rgba(124,109,250,.1); color: var(--accent2); border: 1px solid rgba(124,109,250,.25); }
+  .task-list { list-style: none; margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem; }
+  .task-list li {
+    font-size: .85rem; color: #9ca3af;
+    padding-left: 1.2rem; position: relative;
+  }
+  .task-list li::before {
+    content: '→'; position: absolute; left: 0;
+    color: var(--accent); font-size: .75rem;
+  }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2.5rem;
+    display: grid; grid-template-rows: auto auto auto auto; gap: 1px;
+    overflow: hidden;
+  }
+  .arch-row {
+    display: grid; gap: 1px;
+  }
+  .arch-row.cols-4 { grid-template-columns: repeat(4,1fr); }
+  .arch-row.cols-2 { grid-template-columns: repeat(2,1fr); }
+  .arch-row.cols-3 { grid-template-columns: repeat(3,1fr); }
+  .arch-row.cols-1 { grid-template-columns: 1fr; }
+  .arch-cell {
+    background: var(--surface2); padding: 1.2rem 1rem;
+    position: relative; overflow: hidden;
+  }
+  .arch-cell::after {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  }
+  .arch-cell.green::after { background: var(--accent); }
+  .arch-cell.purple::after { background: var(--accent2); }
+  .arch-cell.red::after { background: var(--accent3); }
+  .arch-cell.yellow::after { background: var(--accent4); }
+  .arch-cell .cell-icon { font-size: 1.3rem; margin-bottom: .4rem; }
+  .arch-cell .cell-title { font-size: .8rem; font-weight: 700; margin-bottom: .3rem; }
+  .arch-cell .cell-desc { font-size: .7rem; color: var(--muted); line-height: 1.5; }
+  .arch-label {
+    font-family: var(--mono); font-size: .6rem; color: var(--muted);
+    letter-spacing: .1em; text-transform: uppercase;
+    background: var(--bg); padding: .4rem 1rem; text-align: center;
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+  }
+  .arch-arrow {
+    text-align: center; color: var(--border); font-size: 1.2rem;
+    padding: .3rem;
+  }
+  .arch-connector {
+    display: flex; align-items: center; justify-content: center;
+    gap: 2rem; padding: .8rem;
+  }
+  .conn-line {
+    flex: 1; height: 1px; background: var(--border);
+    position: relative;
+  }
+  .conn-line::after {
+    content: '↕'; position: absolute;
+    right: -6px; top: -10px; color: var(--muted); font-size: .8rem;
+  }
+  .conn-label { font-family: var(--mono); font-size: .6rem; color: var(--muted); }
+
+  /* ── AGENT PIPELINE ── */
+  .agent-flow {
+    display: grid; grid-template-columns: repeat(4,1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border);
+    margin-top: 1.5rem;
+  }
+  .agent-card {
+    background: var(--surface2); padding: 1.5rem;
+    position: relative;
+  }
+  .agent-card::after {
+    content: '→';
+    position: absolute; right: -12px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent); font-size: 1rem; z-index: 2;
+  }
+  .agent-card:last-child::after { display: none; }
+  .agent-num {
+    font-family: var(--mono); font-size: .65rem; color: var(--muted);
+    margin-bottom: .4rem;
+  }
+  .agent-name { font-size: .95rem; font-weight: 700; margin-bottom: .5rem; }
+  .agent-name span { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+  .agent-io {
+    margin-top: .8rem; display: flex; flex-direction: column; gap: .3rem;
+  }
+  .io-row { display: flex; gap: .4rem; align-items: flex-start; }
+  .io-label {
+    font-family: var(--mono); font-size: .6rem; padding: .15rem .4rem;
+    border-radius: 2px; flex-shrink: 0; margin-top: .1rem;
+  }
+  .io-in { background: rgba(124,109,250,.15); color: var(--accent2); }
+  .io-out { background: rgba(79,255,176,.1); color: var(--accent); }
+  .io-text { font-size: .72rem; color: var(--muted); line-height: 1.4; }
+
+  /* ── SCENARIO TABLE ── */
+  .scenario-grid { display: flex; flex-direction: column; gap: .8rem; margin-top: 1.5rem; }
+  .scenario-row {
+    display: grid; grid-template-columns: 2.5rem 200px 1fr 120px;
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .scenario-row:hover .sc-title { background: var(--surface2); }
+  .sc-num {
+    background: var(--surface2); display: flex; align-items: center;
+    justify-content: center;
+    font-family: var(--mono); font-size: .7rem; color: var(--muted);
+  }
+  .sc-title {
+    background: var(--surface); padding: .9rem 1rem;
+    font-size: .82rem; font-weight: 700; transition: background .15s;
+    display: flex; flex-direction: column; gap: .2rem;
+  }
+  .sc-badge {
+    font-family: var(--mono); font-size: .6rem; letter-spacing: .08em;
+    padding: .15rem .4rem; border-radius: 2px; display: inline-block;
+    width: fit-content;
+  }
+  .badge-mandatory { background: rgba(255,107,107,.1); color: var(--accent3); border: 1px solid rgba(255,107,107,.3); }
+  .badge-optional { background: rgba(107,114,128,.1); color: var(--muted); border: 1px solid var(--border); }
+  .sc-desc {
+    background: var(--surface); padding: .9rem 1rem;
+    font-size: .8rem; color: #9ca3af; line-height: 1.55;
+  }
+  .sc-score {
+    background: var(--surface); padding: .9rem 1rem;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: .2rem;
+  }
+  .sc-pts { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+  .sc-pts-label { font-size: .65rem; color: var(--muted); font-family: var(--mono); }
+
+  /* ── SCHEMA ── */
+  .schema-grid {
+    display: grid; grid-template-columns: repeat(2,1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border);
+    margin-top: 1.5rem;
+  }
+  .schema-card {
+    background: var(--surface2); padding: 1.4rem;
+  }
+  .schema-title {
+    font-family: var(--mono); font-size: .75rem; color: var(--accent);
+    margin-bottom: .8rem; display: flex; align-items: center; gap: .6rem;
+  }
+  .schema-title::before {
+    content: ''; display: block; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--accent); flex-shrink: 0;
+  }
+  .field-list { display: flex; flex-direction: column; gap: .35rem; }
+  .field-row {
+    display: flex; align-items: baseline; gap: .6rem;
+    font-size: .78rem;
+  }
+  .field-name { color: var(--text); font-family: var(--mono); }
+  .field-type { color: var(--accent2); font-size: .7rem; }
+  .field-desc { color: var(--muted); font-size: .72rem; }
+
+  /* ── DATA SEED TRACKER ── */
+  .seed-tracker {
+    display: grid; grid-template-columns: repeat(4,1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border);
+    margin-top: 1.5rem;
+  }
+  .seed-cell {
+    background: var(--surface2); padding: 1.2rem;
+  }
+  .seed-type { font-size: .75rem; font-weight: 700; margin-bottom: .4rem; }
+  .seed-count { font-size: 1.8rem; font-weight: 800; color: var(--accent4); }
+  .seed-detail { font-size: .7rem; color: var(--muted); margin-top: .2rem; line-height: 1.5; }
+
+  /* ── CODE BLOCK ── */
+  .code-block {
+    background: #080a0e; border: 1px solid var(--border);
+    border-radius: 2px; padding: 1.4rem;
+    font-family: var(--mono); font-size: .72rem;
+    line-height: 1.8; overflow-x: auto;
+    margin-top: 1rem;
+  }
+  .code-block .kw { color: var(--accent2); }
+  .code-block .str { color: var(--accent); }
+  .code-block .cm { color: var(--muted); font-style: italic; }
+  .code-block .num { color: var(--accent4); }
+  .code-block .fn { color: var(--accent3); }
+
+  /* ── RISK TABLE ── */
+  .risk-table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-size: .82rem; }
+  .risk-table th {
+    background: var(--surface2); padding: .7rem 1rem;
+    text-align: left; font-size: .7rem; letter-spacing: .05em;
+    color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  .risk-table td {
+    padding: .7rem 1rem; border-bottom: 1px solid var(--border);
+    color: #9ca3af; vertical-align: top;
+  }
+  .risk-table tr:hover td { background: var(--surface2); }
+  .risk-tag {
+    font-size: .65rem; padding: .15rem .5rem; border-radius: 2px;
+    font-family: var(--mono);
+  }
+  .risk-h { background: rgba(255,107,107,.1); color: var(--accent3); border: 1px solid rgba(255,107,107,.2); }
+  .risk-m { background: rgba(255,209,102,.1); color: var(--accent4); border: 1px solid rgba(255,209,102,.2); }
+  .risk-l { background: rgba(79,255,176,.1); color: var(--accent); border: 1px solid rgba(79,255,176,.2); }
+
+  /* ── CRITERIA SCORECARD ── */
+  .scorecard {
+    display: grid; grid-template-columns: repeat(5,1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border);
+    margin-top: 1.5rem;
+  }
+  .sc-cat {
+    background: var(--surface2); padding: 1.2rem;
+  }
+  .sc-cat-name { font-size: .8rem; font-weight: 700; margin-bottom: .3rem; }
+  .sc-cat-pts { font-size: 2rem; font-weight: 800; color: var(--accent); }
+  .sc-cat-sub { font-size: .68rem; color: var(--muted); }
+
+  /* ── FOOTER ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 4rem;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  footer .footer-left { font-family: var(--mono); font-size: .65rem; color: var(--muted); }
+  footer .footer-right { font-family: var(--mono); font-size: .65rem; color: var(--border); }
+
+  /* ── CALLOUT ── */
+  .callout {
+    border-left: 3px solid var(--accent); background: rgba(79,255,176,.04);
+    padding: 1rem 1.2rem; margin-top: 1.5rem;
+    font-size: .85rem; color: #9ca3af;
+  }
+  .callout strong { color: var(--accent); }
+  .callout.warn { border-color: var(--accent3); background: rgba(255,107,107,.04); }
+  .callout.warn strong { color: var(--accent3); }
+
+  /* ── TOGGLE DETAILS ── */
+  details { margin-top: 1rem; }
+  summary {
+    cursor: pointer; font-size: .82rem; color: var(--accent2);
+    padding: .5rem 0; list-style: none;
+    display: flex; align-items: center; gap: .4rem;
+  }
+  summary::before { content: '▶'; font-size: .6rem; transition: transform .2s; }
+  details[open] summary::before { transform: rotate(90deg); }
+
+  /* ── UTIL ── */
+  .mt1 { margin-top: 1rem; }
+  .mt2 { margin-top: 2rem; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  .badge-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .badge {
+    font-family: var(--mono); font-size: .65rem; padding: .2rem .6rem;
+    border-radius: 2px; border: 1px solid var(--border); color: var(--muted);
+  }
+  .badge.active { border-color: rgba(79,255,176,.4); color: var(--accent); background: rgba(79,255,176,.06); }
+
+  @media (max-width: 900px) {
+    .hero { padding: 4rem 1.5rem 2rem; }
+    section { padding: 3rem 1.5rem; }
+    .hero-grid { grid-template-columns: repeat(2,1fr); }
+    .agent-flow { grid-template-columns: 1fr; }
+    .scenario-row { grid-template-columns: 1fr; }
+    .schema-grid { grid-template-columns: 1fr; }
+    .arch-row.cols-4 { grid-template-columns: repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="nav-logo">RKG // POC</span>
+  <div class="nav-links">
+    <a href="#plan">Plan</a>
+    <a href="#arch">Architecture</a>
+    <a href="#agents">Agents</a>
+    <a href="#scenarios">Scenarios</a>
+    <a href="#schema">Schema</a>
+    <a href="#criteria">Criteria</a>
+    <a href="#risks">Risks</a>
+  </div>
+</nav>
+
+<!-- ══════════ HERO ══════════ -->
+<div class="hero">
+  <div class="hero-label">VOR Hackathon 2025 · UseCase 3</div>
+  <h1>Reflexive <span>Knowledge</span><br>Graph — POC</h1>
+  <p class="hero-sub">
+    Plan, design, and architecture for a working proof-of-concept that catches SKU data quality failures
+    <em>before</em> model training — using neighbourhood geometry, not authored rules.
+  </p>
+  <div class="hero-grid">
+    <div class="hero-stat"><div class="num">4</div><div class="label">Agent Layers</div></div>
+    <div class="hero-stat"><div class="num">6</div><div class="label">Demo Scenarios</div></div>
+    <div class="hero-stat"><div class="num">200+</div><div class="label">Seed Entities</div></div>
+    <div class="hero-stat"><div class="num">100</div><div class="label">Points Total</div></div>
+  </div>
+</div>
+
+<!-- ══════════ SECTION 1 — PHASED PLAN ══════════ -->
+<section id="plan">
+  <div class="section-label">Section 01</div>
+  <h2>Phased Build Plan</h2>
+  <p>The POC is built in four phases across roughly 5–7 working days. Each phase produces independently testable deliverables. Phases are ordered so that earlier outputs are prerequisites for later ones — the pipeline cannot be skipped.</p>
+
+  <div class="phases mt2">
+
+    <!-- Phase 1 -->
+    <div class="phase">
+      <div class="phase-left">
+        <div class="phase-week">Day 1–2</div>
+        <div style="display:flex;align-items:center;gap:.4rem;">
+          <div class="phase-dot"><div class="phase-dot-inner"></div></div>
+        </div>
+      </div>
+      <div class="phase-right">
+        <div class="phase-tag tag-green">PHASE 1 — DATA FOUNDATION</div>
+        <h3>Database Schema + Seed Dataset</h3>
+        <p>Establish the dual-layer data store (Neo4j + PostgreSQL/PgVector) and load synthetic SKU lifecycle data. This is the foundation — nothing works without it.</p>
+        <ul class="task-list">
+          <li>Stand up PostgreSQL with <code>pgvector</code> extension; create <code>entities</code> table with <code>self_emb vector(768)</code> and <code>reflect_emb vector(768)</code>; add ivfflat indexes.</li>
+          <li>Stand up Neo4j; define all 8 node labels and 8 typed relationship types with property maps.</li>
+          <li>Write Python data loader: reads JSON seed records → inserts Neo4j nodes + Postgres rows atomically.</li>
+          <li>Produce seed dataset: ≥200 entities across all 8 node types, ≥500 typed relationships, covering all required failure patterns.</li>
+          <li>Verify data integrity: every Neo4j entity_id maps to exactly one Postgres row; no orphan vectors.</li>
+        </ul>
+        <div class="callout mt1"><strong>Exit criterion:</strong> <code>SELECT count(*) FROM entities</code> returns ≥200; Neo4j node count matches. All 8 relationship types present in graph.</div>
+      </div>
+    </div>
+
+    <!-- Phase 2 -->
+    <div class="phase">
+      <div class="phase-left">
+        <div class="phase-week">Day 2–3</div>
+        <div style="display:flex;align-items:center;gap:.4rem;">
+          <div class="phase-dot warn"><div class="phase-dot-inner"></div></div>
+        </div>
+      </div>
+      <div class="phase-right">
+        <div class="phase-tag tag-yellow">PHASE 2 — EMBEDDING PIPELINE</div>
+        <h3>Self-Embeddings + Reflection Vectors + Anomaly Scoring</h3>
+        <p>Build and validate the core innovation: the reflection vector pipeline. The anomaly score query must be running before any agent work begins.</p>
+        <ul class="task-list">
+          <li>Implement <code>embed_entity(entity_dict)</code> using <code>all-MiniLM-L6-v2</code>; populate <code>self_emb</code> for all entities. Verify cosine similarity clusters by entity type.</li>
+          <li>Implement <code>compute_reflection(entity_id)</code>: fetch neighbours from Neo4j, apply configurable REL_WEIGHTS dict, weighted-mean aggregate, L2-normalise → write to <code>reflect_emb</code>.</li>
+          <li>Write batch refresh script — full recompute across all entities in a single run.</li>
+          <li>Run anomaly score SQL: <code>1 - (self_emb &lt;=&gt; reflect_emb)</code> across all SKU entities — verify known problem entities appear in top decile, healthy entities in lower half.</li>
+          <li>Log per-entity anomaly scores to <code>anomaly_score_log</code> table for drift tracking.</li>
+        </ul>
+        <div class="callout mt1"><strong>Exit criterion:</strong> Brand-mismatch cascade SKUs score ≥0.80 anomaly. Confirmed healthy SKUs score ≤0.30. Score distribution is not uniformly high (system not flagging everything).</div>
+      </div>
+    </div>
+
+    <!-- Phase 3 -->
+    <div class="phase">
+      <div class="phase-left">
+        <div class="phase-week">Day 3–5</div>
+        <div style="display:flex;align-items:center;gap:.4rem;">
+          <div class="phase-dot info"><div class="phase-dot-inner"></div></div>
+        </div>
+      </div>
+      <div class="phase-right">
+        <div class="phase-tag tag-purple">PHASE 3 — MULTI-AGENT PIPELINE</div>
+        <h3>Supervisor → Planner → Doer → Critic</h3>
+        <p>Build each agent independently in order. Each has a single responsibility. Wire them together only after each passes its own unit test.</p>
+        <ul class="task-list">
+          <li><strong>Supervisor:</strong> LLM-backed NL parser producing a typed <code>QuerySpec</code> dataclass (entity_types, time_window, task_type, traversal_depth). Include retry logic for re-routing on Critic rejection.</li>
+          <li><strong>Planner:</strong> Receives QuerySpec, emits an ordered <code>TaskList</code> of Cypher templates and ANN targets per hop. Decision logic for which hops use self_emb vs reflect_emb vs both.</li>
+          <li><strong>Doer:</strong> Executes (1) Cypher traversal on Neo4j, (2) self_emb ANN on Postgres, (3) reflect_emb ANN on Postgres. Unions and deduplicates by entity_id. Returns candidate causal chains as ordered entity dicts with timestamps.</li>
+          <li><strong>Critic:</strong> Validates each chain: monotonic timestamps, ≥5 entities per hop, confidence = temporal × evidence density × avg anomaly. Rejects below 0.65. Returns top-3 ranked chains.</li>
+        </ul>
+        <div class="callout mt1"><strong>Exit criterion:</strong> Brand mismatch query produces a validated chain with confidence ≥0.81. Critic rejects ≥1 candidate chain per test run. End-to-end latency &lt;60 seconds.</div>
+      </div>
+    </div>
+
+    <!-- Phase 4 -->
+    <div class="phase">
+      <div class="phase-left">
+        <div class="phase-week">Day 5–7</div>
+        <div style="display:flex;align-items:center;gap:.4rem;">
+          <div class="phase-dot"><div class="phase-dot-inner"></div></div>
+        </div>
+      </div>
+      <div class="phase-right">
+        <div class="phase-tag tag-green">PHASE 4 — DEMO NOTEBOOK + BENCHMARKS</div>
+        <h3>Jupyter Notebook, A/B Cell, Accuracy + Throughput</h3>
+        <ul class="task-list">
+          <li>Write end-to-end Jupyter notebook: seed load → embedding pipeline → 3+ scenario queries → per-agent output → final ranked chains. Must run top-to-bottom in &lt;5 min on a laptop.</li>
+          <li>Add A/B comparison cell: same question → closed-world Cypher (0 results) vs RKG agent (validated chain 0.81). Make the juxtaposition unmissable — side-by-side output with clear visual separation.</li>
+          <li>Report benchmarks: end-to-end latency, anomaly score distribution histogram, Critic acceptance rate, classification accuracy vs ground truth labels (target ≥85%).</li>
+          <li>Cover all 6 scenarios in the notebook (at minimum Scenarios 1 and 4 as mandatory demos).</li>
+          <li>Dry-run the full demo — one person drives, another narrates agent reasoning for one validated chain.</li>
+        </ul>
+        <div class="callout mt1"><strong>Exit criterion:</strong> Notebook runs clean, end-to-end, in &lt;5 min. A/B cell is the visual centrepiece. Classification accuracy ≥85% against ground truth. Live demo rehearsed ≥2 times.</div>
+      </div>
+    </div>
+
+  </div><!-- /phases -->
+</section>
+
+<!-- ══════════ SECTION 2 — ARCHITECTURE ══════════ -->
+<section id="arch">
+  <div class="section-label">Section 02</div>
+  <h2>System Architecture</h2>
+  <p>The POC uses a three-layer architecture: a dual data store at the base, a vector pipeline in the middle, and a multi-agent query layer on top. Each layer is independently testable and has clear interfaces.</p>
+
+  <div class="arch-diagram mt2">
+
+    <!-- Layer 4: User Interface -->
+    <div class="arch-label" style="background:var(--surface);">
+      ↓ NATURAL LANGUAGE INPUT &nbsp;·&nbsp; ANALYST / DATA SCIENTIST
+    </div>
+
+    <!-- Layer 3: Agent Pipeline -->
+    <div class="arch-row cols-4">
+      <div class="arch-cell purple">
+        <div class="cell-icon">🧠</div>
+        <div class="cell-title">Agent 1 — Supervisor</div>
+        <div class="cell-desc">LLM NL parser. Extracts entity types, time window, task type. Emits QuerySpec. Reroutes on Critic failure.</div>
+      </div>
+      <div class="arch-cell purple">
+        <div class="cell-icon">🗺️</div>
+        <div class="cell-title">Agent 2 — Planner</div>
+        <div class="cell-desc">Builds Cypher traversal plan + ANN targets. Decides per-hop: self_emb vs reflect_emb. Emits TaskList.</div>
+      </div>
+      <div class="arch-cell purple">
+        <div class="cell-icon">⚡</div>
+        <div class="cell-title">Agent 3 — Doer</div>
+        <div class="cell-desc">Executes Cypher + ANN (self) + ANN (reflect). Unions result sets. Deduplicates. Assembles candidate chains.</div>
+      </div>
+      <div class="arch-cell purple">
+        <div class="cell-icon">✅</div>
+        <div class="cell-title">Agent 4 — Critic</div>
+        <div class="cell-desc">Validates chains: timestamps, evidence density, confidence score. Rejects &lt;0.65. Returns top-3 chains.</div>
+      </div>
+    </div>
+
+    <div class="arch-label">↑ CAUSAL CHAINS + CONFIDENCE SCORES &nbsp;·&nbsp; ↓ QUERYS PECS + TASK LISTS</div>
+
+    <!-- Layer 2: Embedding Pipeline -->
+    <div class="arch-row cols-3">
+      <div class="arch-cell yellow">
+        <div class="cell-icon">🔤</div>
+        <div class="cell-title">Self-Embedding Generator</div>
+        <div class="cell-desc"><code>embed_entity(dict)</code> → all-MiniLM-L6-v2 → 768-d vector → <code>self_emb</code> in Postgres.</div>
+      </div>
+      <div class="arch-cell yellow">
+        <div class="cell-icon">🔄</div>
+        <div class="cell-title">Reflection Pipeline</div>
+        <div class="cell-desc"><code>compute_reflection(id)</code> → fetch neighbours from Neo4j → apply REL_WEIGHTS → weighted mean → L2-norm → <code>reflect_emb</code>.</div>
+      </div>
+      <div class="arch-cell yellow">
+        <div class="cell-icon">📊</div>
+        <div class="cell-title">Anomaly Score Query</div>
+        <div class="cell-desc">SQL: <code>1 - (self_emb &lt;=&gt; reflect_emb)</code>. No rule. Ranks all SKUs. Writes to <code>anomaly_score_log</code>.</div>
+      </div>
+    </div>
+
+    <div class="arch-label">↑ ENTITY DATA + NEIGHBOUR GRAPHS &nbsp;·&nbsp; ↓ EMBEDDINGS WRITTEN BACK</div>
+
+    <!-- Layer 1: Dual Data Store -->
+    <div class="arch-row cols-2">
+      <div class="arch-cell green">
+        <div class="cell-icon">🕸️</div>
+        <div class="cell-title">Neo4j — Entity Graph</div>
+        <div class="cell-desc">8 node labels. 8 typed relationships. Weighted edges. Stores the structural graph for Cypher traversal. Each node has a matching UUID in Postgres.</div>
+      </div>
+      <div class="arch-cell green">
+        <div class="cell-icon">🗄️</div>
+        <div class="cell-title">PostgreSQL + pgvector</div>
+        <div class="cell-desc"><code>entities</code> table: <code>self_emb vector(768)</code> + <code>reflect_emb vector(768)</code>. ivfflat indexes (lists=100). All ANN searches happen here.</div>
+      </div>
+    </div>
+
+    <!-- Data Loader -->
+    <div class="arch-label" style="background:var(--surface);">
+      ↑ PYTHON DATA LOADER &nbsp;·&nbsp; SYNTHETIC SEED JSON (200+ ENTITIES, 500+ RELATIONSHIPS)
+    </div>
+
+  </div><!-- /arch-diagram -->
+
+  <div class="callout mt2">
+    <strong>Key design decision:</strong> Neo4j owns the structural graph (traversal, hop logic, causal chain assembly). Postgres owns all vector math (ANN search, anomaly scoring). The two are always kept in sync via the entity_id UUID foreign key. The embedding pipeline is the bridge — it reads from Neo4j and writes to Postgres.
+  </div>
+</section>
+
+<!-- ══════════ SECTION 3 — AGENT PIPELINE DETAIL ══════════ -->
+<section id="agents">
+  <div class="section-label">Section 03</div>
+  <h2>Multi-Agent Pipeline Detail</h2>
+  <p>Each agent has exactly one responsibility. They communicate via typed dataclasses, not raw strings. The Critic can force the Supervisor to re-route with deeper traversal if all chains are rejected.</p>
+
+  <div class="agent-flow">
+    <div class="agent-card">
+      <div class="agent-num">AGENT 01</div>
+      <div class="agent-name">Supervisor <span>Query Orchestrator</span></div>
+      <p style="font-size:.75rem;color:var(--muted);line-height:1.5;">Uses an LLM with a structured-output prompt to parse the analyst's natural-language question into a typed spec. The only agent that talks to an LLM.</p>
+      <div class="agent-io">
+        <div class="io-row"><span class="io-label io-in">IN</span><span class="io-text">Natural language question string</span></div>
+        <div class="io-row"><span class="io-label io-out">OUT</span><span class="io-text">QuerySpec {entity_types, time_window, task_type, traversal_depth}</span></div>
+        <div class="io-row"><span class="io-label io-in">RE</span><span class="io-text">On Critic rejection → increment depth, re-route to Planner</span></div>
+      </div>
+    </div>
+
+    <div class="agent-card">
+      <div class="agent-num">AGENT 02</div>
+      <div class="agent-name">Planner <span>Query Decomposer</span></div>
+      <p style="font-size:.75rem;color:var(--muted);line-height:1.5;">Translates QuerySpec into a concrete execution plan: which Cypher hops to run, in what order, and whether each hop needs self_emb, reflect_emb, or both.</p>
+      <div class="agent-io">
+        <div class="io-row"><span class="io-label io-in">IN</span><span class="io-text">QuerySpec from Supervisor</span></div>
+        <div class="io-row"><span class="io-label io-out">OUT</span><span class="io-text">TaskList [ {cypher_template, ann_target, hop_index} ]</span></div>
+      </div>
+    </div>
+
+    <div class="agent-card">
+      <div class="agent-num">AGENT 03</div>
+      <div class="agent-name">Doer <span>Query Executor</span></div>
+      <p style="font-size:.75rem;color:var(--muted);line-height:1.5;">Pure execution. No decisions. Runs exactly what Planner sent. Returns raw evidence, not judgements. The only agent that touches both databases.</p>
+      <div class="agent-io">
+        <div class="io-row"><span class="io-label io-in">IN</span><span class="io-text">TaskList from Planner</span></div>
+        <div class="io-row"><span class="io-label io-out">OUT</span><span class="io-text">Candidate chains [ entity_path[], timestamps[], anomaly_scores[] ]</span></div>
+      </div>
+    </div>
+
+    <div class="agent-card">
+      <div class="agent-num">AGENT 04</div>
+      <div class="agent-name">Critic <span>Evidence Validator</span></div>
+      <p style="font-size:.75rem;color:var(--muted);line-height:1.5;">Quality gate. Three checks: temporal ordering, evidence density, confidence threshold. Returns only what it can stand behind.</p>
+      <div class="agent-io">
+        <div class="io-row"><span class="io-label io-in">IN</span><span class="io-text">Raw candidate chains from Doer</span></div>
+        <div class="io-row"><span class="io-label io-out">OUT</span><span class="io-text">Top-3 chains {confidence, entity_path, per-hop reasoning} OR rejection signal to Supervisor</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Critic scoring formula -->
+  <div class="code-block mt2">
+<span class="cm"># Critic confidence formula</span>
+confidence = (
+    temporal_validity   <span class="cm"># 1.0 if timestamps monotonically increase, else 0.0</span>
+    * evidence_density  <span class="cm"># min(entity_count_per_hop) / required_minimum (cap at 1.0)</span>
+    * avg_anomaly_score <span class="cm"># mean anomaly score of anchor entities in the chain</span>
+)
+
+<span class="cm"># Thresholds</span>
+REJECT_THRESHOLD = <span class="num">0.65</span>
+TOP_K_CHAINS     = <span class="num">3</span>
+
+<span class="cm"># Classification output</span>
+<span class="kw">if</span> confidence >= <span class="num">0.80</span>:   <span class="kw">return</span> <span class="str">"Confirmed Anomaly"</span>
+<span class="kw">elif</span> confidence >= <span class="num">0.65</span>: <span class="kw">return</span> <span class="str">"Needs Review"</span>
+<span class="kw">else</span>:                    <span class="kw">return</span> <span class="str">"Rejected → re-route"</span>
+  </div>
+</section>
+
+<!-- ══════════ SECTION 4 — SCENARIOS ══════════ -->
+<section id="scenarios">
+  <div class="section-label">Section 04</div>
+  <h2>Demo Scenarios</h2>
+  <p>Six scenarios, two mandatory. Scenarios 1 and 4 are the demo centrepiece — all others add breadth and address distinct failure modes.</p>
+
+  <div class="scenario-grid">
+
+    <div class="scenario-row">
+      <div class="sc-num">1</div>
+      <div class="sc-title">
+        Brand Mismatch Cascade
+        <span class="sc-badge badge-mandatory">MANDATORY</span>
+      </div>
+      <div class="sc-desc">
+        233 new brand records created at import instead of matching existing ones. Training data fragments across duplicate brand classes. Model underperforms at week 5. The causal chain spans 4 hops across 3 weeks. No flag was ever set. Standard query returns 0 results.
+        <br><br><strong style="color:var(--accent4)">Agent output:</strong> Validated chain [confidence 0.81]: Import → Brand mismatch (233) → Training fragmentation → Inference degradation. Top anomaly SKUs surfaced with no rule written.
+      </div>
+      <div class="sc-score"><div class="sc-pts">14</div><div class="sc-pts-label">pts (AC6+9)</div></div>
+    </div>
+
+    <div class="scenario-row">
+      <div class="sc-num">2</div>
+      <div class="sc-title">
+        Weak Multi-Signal SKU
+        <span class="sc-badge badge-optional">optional</span>
+      </div>
+      <div class="sc-desc">
+        SKU-4821: missing UPC + brand fuzzy-match 0.41 + zero training images + 3 scan failures. Each signal individually below its alert threshold. No cross-source rule exists. Standard system never combines them.
+        <br><br><strong style="color:var(--accent4)">Agent output:</strong> Anomaly score 0.94 — top decile. Flagged before training starts. No individual threshold crossed.
+      </div>
+      <div class="sc-score"><div class="sc-pts">6</div><div class="sc-pts-label">pts (AC7)</div></div>
+    </div>
+
+    <div class="scenario-row">
+      <div class="sc-num">3</div>
+      <div class="sc-title">
+        Proactive Risk Ranking
+        <span class="sc-badge badge-optional">optional</span>
+      </div>
+      <div class="sc-desc">
+        Before training begins for a new customer, rank all their SKUs by anomaly score. Top decile = flag for data review before any training run is triggered. Single SQL query. No rule authored.
+        <br><br><strong style="color:var(--accent4)">Agent output:</strong> Top-20 at-risk SKU list: 0.94, 0.89, 0.85... Entirely proactive.
+      </div>
+      <div class="sc-score"><div class="sc-pts">5</div><div class="sc-pts-label">pts (AC8)</div></div>
+    </div>
+
+    <div class="scenario-row">
+      <div class="sc-num">4</div>
+      <div class="sc-title">
+        A/B: Closed World vs RKG
+        <span class="sc-badge badge-mandatory">MANDATORY</span>
+      </div>
+      <div class="sc-desc">
+        Same question issued to standard closed-world Cypher (no embeddings, no agents) and to the full RKG pipeline. Standard returns 0 results because <code>b.flag = 'duplicate'</code> was never set. RKG returns validated causal chain at confidence 0.81 using graph geometry alone. This is the core demo moment.
+      </div>
+      <div class="sc-score"><div class="sc-pts">7</div><div class="sc-pts-label">pts (AC9)</div></div>
+    </div>
+
+    <div class="scenario-row">
+      <div class="sc-num">5</div>
+      <div class="sc-title">
+        Shared-SKU Boundary
+        <span class="sc-badge badge-optional">optional</span>
+      </div>
+      <div class="sc-desc">
+        285 SKUs appear to belong to one customer but their TenantSKU neighbours span 4+ customers. A change cascades silently. The reflection vector encodes the cross-customer signal. Previously took analysts days to identify manually.
+        <br><br><strong style="color:var(--accent4)">Agent output:</strong> Safe-to-change list in seconds. Customer dependency count per shared SKU.
+      </div>
+      <div class="sc-score"><div class="sc-pts">4</div><div class="sc-pts-label">pts (AC15)</div></div>
+    </div>
+
+    <div class="scenario-row">
+      <div class="sc-num">6</div>
+      <div class="sc-title">
+        Picklist Auto-Map Error
+        <span class="sc-badge badge-optional">optional</span>
+      </div>
+      <div class="sc-desc">
+        TenantSKU auto-mapped via UPC to a global SKU in a different product category. The tenant record looks valid. The global SKU's neighbourhood (TrainingImages, Pallets, Brands) says otherwise. Error persists until model degrades.
+        <br><br><strong style="color:var(--accent4)">Agent output:</strong> Global SKU flagged [score 0.88] within next batch refresh. Incorrect mapping surfaced before next training run.
+      </div>
+      <div class="sc-score"><div class="sc-pts">4</div><div class="sc-pts-label">pts (scenario)</div></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══════════ SECTION 5 — SCHEMA ══════════ -->
+<section id="schema">
+  <div class="section-label">Section 05</div>
+  <h2>Data Schema &amp; Seed Requirements</h2>
+
+  <div class="grid-2 mt1">
+    <div>
+      <h3>Node Types (8)</h3>
+      <div class="schema-grid" style="margin-top:.8rem;">
+        <div class="schema-card">
+          <div class="schema-title">SKU</div>
+          <div class="field-list">
+            <div class="field-row"><span class="field-name">sku_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">upc</span><span class="field-type">TEXT</span><span class="field-desc">nullable for bad-data cases</span></div>
+            <div class="field-row"><span class="field-name">brand_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">package_type_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">status</span><span class="field-type">TEXT</span><span class="field-desc">vor-enabled / inactive</span></div>
+            <div class="field-row"><span class="field-name">trained_flag</span><span class="field-type">BOOL</span></div>
+          </div>
+        </div>
+        <div class="schema-card">
+          <div class="schema-title">Brand</div>
+          <div class="field-list">
+            <div class="field-row"><span class="field-name">brand_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">name</span><span class="field-type">TEXT</span></div>
+            <div class="field-row"><span class="field-name">canonical_flag</span><span class="field-type">BOOL</span></div>
+            <div class="field-row"><span class="field-name">normalization_state</span><span class="field-type">TEXT</span><span class="field-desc">matched / new</span></div>
+            <div class="field-row"><span class="field-name">fuzzy_match_candidates</span><span class="field-type">JSONB</span><span class="field-desc">[{id, confidence}]</span></div>
+          </div>
+        </div>
+        <div class="schema-card">
+          <div class="schema-title">TenantSKU</div>
+          <div class="field-list">
+            <div class="field-row"><span class="field-name">tenant_sku_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">customer_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">global_sku_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">match_method</span><span class="field-type">TEXT</span><span class="field-desc">exact / fuzzy / new</span></div>
+            <div class="field-row"><span class="field-name">auto_map_flag</span><span class="field-type">BOOL</span></div>
+            <div class="field-row"><span class="field-name">import_date</span><span class="field-type">DATE</span></div>
+          </div>
+        </div>
+        <div class="schema-card">
+          <div class="schema-title">MergeEvent</div>
+          <div class="field-list">
+            <div class="field-row"><span class="field-name">merge_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">source_sku_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">target_sku_id</span><span class="field-type">UUID</span></div>
+            <div class="field-row"><span class="field-name">merge_date</span><span class="field-type">DATE</span></div>
+            <div class="field-row"><span class="field-name">rollback_available</span><span class="field-type">BOOL</span></div>
+            <div class="field-row"><span class="field-name">cleanup_status</span><span class="field-type">TEXT</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Relationship Types (8) with Weights</h3>
+      <table class="risk-table" style="margin-top:.8rem;">
+        <thead>
+          <tr><th>Relationship</th><th>Weight</th><th>Signal Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>MERGED_INTO</code></td><td style="color:var(--accent3)">3.0</td><td>Strongest data quality signal</td></tr>
+          <tr><td><code>SCANNED_ON</code></td><td style="color:var(--accent3)">2.5</td><td>Production failure evidence</td></tr>
+          <tr><td><code>MAPS_TO</code></td><td style="color:var(--accent4)">2.0</td><td>Auto-map error detection</td></tr>
+          <tr><td><code>TRAINED_WITH</code></td><td style="color:var(--accent4)">2.0</td><td>Evidence gap signal</td></tr>
+          <tr><td><code>FUZZY_MATCH</code></td><td style="color:var(--accent4)">1.8</td><td>Brand duplication signal</td></tr>
+          <tr><td><code>BELONGS_TO_BRAND</code></td><td style="color:var(--accent)">1.5</td><td>Brand cascade driver</td></tr>
+          <tr><td><code>HAS_PACKAGE</code></td><td style="color:var(--accent)">1.5</td><td>Package-type mismatch</td></tr>
+          <tr><td><code>USED_BY</code></td><td style="color:var(--muted)">1.0</td><td>Shared-SKU boundary</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Seed requirements -->
+  <h3 class="mt2">Seed Dataset Minimums</h3>
+  <div class="seed-tracker">
+    <div class="seed-cell">
+      <div class="seed-type">Total Entities</div>
+      <div class="seed-count">200+</div>
+      <div class="seed-detail">Across all 8 node types. Stored in both Neo4j and Postgres.</div>
+    </div>
+    <div class="seed-cell">
+      <div class="seed-type">Typed Relationships</div>
+      <div class="seed-count">500+</div>
+      <div class="seed-detail">All 8 relationship types represented. REL_WEIGHTS applied at reflection compute time.</div>
+    </div>
+    <div class="seed-cell">
+      <div class="seed-type">Ground Truth Labels</div>
+      <div class="seed-count">20+</div>
+      <div class="seed-detail">Analyst-labelled: confirmed anomaly / valid / needs review. Used for accuracy benchmark during judging.</div>
+    </div>
+    <div class="seed-cell">
+      <div class="seed-type">Failure Patterns</div>
+      <div class="seed-count">18+</div>
+      <div class="seed-detail">≥5 brand mismatch, ≥5 multi-signal, ≥5 shared-SKU, ≥3 auto-map error, ≥10 healthy SKUs.</div>
+    </div>
+  </div>
+
+  <!-- Core SQL -->
+  <details class="mt2">
+    <summary>View PostgreSQL Schema (core tables)</summary>
+    <div class="code-block">
+<span class="kw">CREATE EXTENSION IF NOT EXISTS</span> vector;
+
+<span class="kw">CREATE TABLE</span> entities (
+  entity_id    UUID    <span class="kw">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  entity_type  TEXT    <span class="kw">NOT NULL</span>,   <span class="cm">-- 'sku' | 'brand' | 'tenant_sku' | 'merge_event' | ...</span>
+  label        TEXT,
+  properties   JSONB,              <span class="cm">-- all domain attributes: UPC, weight, dims, status ...</span>
+  self_emb     vector(<span class="num">768</span>),      <span class="cm">-- own attribute embedding</span>
+  reflect_emb  vector(<span class="num">768</span>)       <span class="cm">-- neighbourhood-view embedding</span>
+);
+
+<span class="kw">CREATE INDEX ON</span> entities <span class="kw">USING</span> ivfflat (self_emb vector_cosine_ops)
+  <span class="kw">WITH</span> (lists = <span class="num">100</span>);
+<span class="kw">CREATE INDEX ON</span> entities <span class="kw">USING</span> ivfflat (reflect_emb vector_cosine_ops)
+  <span class="kw">WITH</span> (lists = <span class="num">100</span>);
+
+<span class="kw">CREATE TABLE</span> anomaly_score_log (
+  entity_id    UUID    <span class="kw">REFERENCES</span> entities(entity_id),
+  anomaly_score NUMERIC(<span class="num">6</span>,<span class="num">4</span>),
+  computed_at  TIMESTAMPTZ <span class="kw">DEFAULT</span> now()
+);
+
+<span class="cm">-- Rank all SKUs by anomaly — no rule required</span>
+<span class="kw">SELECT</span> entity_id, label,
+  ROUND(CAST(<span class="num">1</span> - (self_emb &lt;=&gt; reflect_emb) AS numeric), <span class="num">4</span>) AS anomaly_score
+<span class="kw">FROM</span> entities
+<span class="kw">WHERE</span> entity_type = <span class="str">'sku'</span>
+<span class="kw">ORDER BY</span> anomaly_score <span class="kw">DESC LIMIT</span> <span class="num">20</span>;
+    </div>
+  </details>
+
+  <details class="mt1">
+    <summary>View Reflection Vector Pipeline (Python)</summary>
+    <div class="code-block">
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">from</span> sentence_transformers <span class="kw">import</span> SentenceTransformer
+
+model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+
+<span class="cm"># Configurable — domain team can tune without touching algorithm</span>
+REL_WEIGHTS = {
+    <span class="str">'MERGED_INTO'</span>:     <span class="num">3.0</span>,
+    <span class="str">'SCANNED_ON'</span>:      <span class="num">2.5</span>,
+    <span class="str">'MAPS_TO'</span>:         <span class="num">2.0</span>,
+    <span class="str">'TRAINED_WITH'</span>:    <span class="num">2.0</span>,
+    <span class="str">'FUZZY_MATCH'</span>:     <span class="num">1.8</span>,
+    <span class="str">'BELONGS_TO_BRAND'</span>: <span class="num">1.5</span>,
+    <span class="str">'HAS_PACKAGE'</span>:     <span class="num">1.5</span>,
+    <span class="str">'USED_BY'</span>:         <span class="num">1.0</span>,
+}
+
+<span class="kw">def</span> <span class="fn">embed_entity</span>(entity: dict) -> list[float]:
+    text = <span class="str">f"{entity['type']} {entity['label']} "</span> \
+           <span class="str">f"{' '.join(str(v) for v in entity['properties'].values())}"</span>
+    <span class="kw">return</span> model.encode(text).tolist()
+
+<span class="kw">def</span> <span class="fn">compute_reflection</span>(entity_id, neo4j_session, pg_conn) -> list[float]:
+    rows = neo4j_session.run(<span class="str">"""
+        MATCH (e {entity_id: $eid})-[r]-(n)
+        RETURN type(r) AS rel, n.entity_id AS nid
+    """</span>, eid=entity_id)
+
+    signals = []
+    <span class="kw">for</span> row <span class="kw">in</span> rows:
+        n_emb  = <span class="fn">fetch_self_emb</span>(row[<span class="str">'nid'</span>], pg_conn)
+        weight = REL_WEIGHTS.get(row[<span class="str">'rel'</span>], <span class="num">1.0</span>)
+        signals.append(weight * np.array(n_emb))
+
+    <span class="kw">if not</span> signals:
+        <span class="kw">return</span> [<span class="num">0.0</span>] * <span class="num">768</span>
+    vec = np.mean(signals, axis=<span class="num">0</span>)
+    <span class="kw">return</span> (vec / (np.linalg.norm(vec) + <span class="num">1e-8</span>)).tolist()
+    </div>
+  </details>
+</section>
+
+<!-- ══════════ SECTION 6 — ACCEPTANCE CRITERIA SCORECARD ══════════ -->
+<section id="criteria">
+  <div class="section-label">Section 06</div>
+  <h2>Acceptance Criteria Scorecard</h2>
+  <p>100 points across 5 categories. Bold the ones your team must absolutely nail before demo day. The 15 mandatory agent/classification points are the floor — everything above is gravy.</p>
+
+  <div class="scorecard">
+    <div class="sc-cat">
+      <div class="sc-cat-name">Embedding Quality</div>
+      <div class="sc-pts">24</div>
+      <div class="sc-cat-sub">AC 1–5: Self-emb, reflect-emb, anomaly distribution, healthy SKUs, configurable weights</div>
+    </div>
+    <div class="sc-cat">
+      <div class="sc-cat-name">Agent Quality</div>
+      <div class="sc-pts">30</div>
+      <div class="sc-cat-sub">AC 6–10: Scenarios 1–4 + Critic rejection. Highest-value category.</div>
+    </div>
+    <div class="sc-cat">
+      <div class="sc-cat-name">Classification</div>
+      <div class="sc-pts">23</div>
+      <div class="sc-cat-sub">AC 11–15: Evidence package, Needs Review output, healthy SKU, 85% accuracy, Scenario 5</div>
+    </div>
+    <div class="sc-cat">
+      <div class="sc-cat-name">Throughput</div>
+      <div class="sc-pts">15</div>
+      <div class="sc-cat-sub">AC 16–19: 60s query, batch refresh, 5-min notebook, dual-space ANN value</div>
+    </div>
+    <div class="sc-cat">
+      <div class="sc-cat-name">Demo Quality</div>
+      <div class="sc-pts">8</div>
+      <div class="sc-cat-sub">AC 20: Live run, 3 scenarios, explain one validated causal chain</div>
+    </div>
+  </div>
+
+  <div class="callout warn mt2">
+    <strong>Non-negotiables:</strong> AC 6 (Scenario 1 causal chain) and AC 9 (A/B comparison) are mandatory. Both are worth 7 pts each and are the two moments judges will remember. Build Scenario 1 first, build the A/B cell early, rehearse both.
+  </div>
+</section>
+
+<!-- ══════════ SECTION 7 — RISK REGISTER ══════════ -->
+<section id="risks">
+  <div class="section-label">Section 07</div>
+  <h2>Risk Register &amp; Mitigations</h2>
+
+  <table class="risk-table">
+    <thead>
+      <tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Reflection vectors are uniformly high</strong> — system flags everything, anomaly score loses signal</td>
+        <td><span class="risk-tag risk-h">HIGH</span></td>
+        <td>Validate score distribution before building agents. Tune REL_WEIGHTS dict. Ensure ≥10 confirmed healthy SKUs have low scores as a calibration check. Gate Phase 3 on this passing.</td>
+      </tr>
+      <tr>
+        <td><strong>Neo4j–Postgres sync drift</strong> — entity_ids exist in one DB but not the other after partial loads</td>
+        <td><span class="risk-tag risk-h">HIGH</span></td>
+        <td>Write atomic loader: Neo4j insert + Postgres insert in a single transaction wrapper. Add integrity check script that counts both and asserts equality before any pipeline run.</td>
+      </tr>
+      <tr>
+        <td><strong>LLM Supervisor produces malformed QuerySpec</strong> — agents downstream receive bad types</td>
+        <td><span class="risk-tag risk-m">MEDIUM</span></td>
+        <td>Use structured output mode (JSON schema enforcement) on the LLM call. Add Pydantic validation on QuerySpec. Fallback: if parsing fails, use a hardcoded default QuerySpec for the demo scenario.</td>
+      </tr>
+      <tr>
+        <td><strong>Notebook runs too slowly</strong> — &gt;5 min on a standard laptop, violates AC 18</td>
+        <td><span class="risk-tag risk-m">MEDIUM</span></td>
+        <td>Pre-compute and cache all embeddings before notebook starts. Use pickle or NPZ file. Notebook loads pre-computed vectors, does not call the sentence encoder live during the demo run.</td>
+      </tr>
+      <tr>
+        <td><strong>Critic accepts all chains</strong> — no rejections visible, AC 10 fails</td>
+        <td><span class="risk-tag risk-m">MEDIUM</span></td>
+        <td>Seed at least 3 synthetic "bad chains" with out-of-order timestamps or low entity counts. These should always fail. Demonstrate Critic rejection on these explicitly in the notebook.</td>
+      </tr>
+      <tr>
+        <td><strong>Classification accuracy below 85%</strong> — AC 14 fails</td>
+        <td><span class="risk-tag risk-m">MEDIUM</span></td>
+        <td>Tune anomaly score thresholds against the 20 ground-truth labels during Phase 2. Adjust the confirmed/needs-review/rejected cutoffs (0.80/0.65) based on observed score distribution on labelled data.</td>
+      </tr>
+      <tr>
+        <td><strong>Seed data doesn't produce enough signal variation</strong> — failure cases don't separate from healthy in score space</td>
+        <td><span class="risk-tag risk-l">LOW</span></td>
+        <td>Design seed data with intentionally extreme attribute divergence for failure cases. Brand mismatch SKUs should have no training images and multiple scan failures — maximally different neighbourhoods from healthy SKUs.</td>
+      </tr>
+      <tr>
+        <td><strong>A/B comparison not visually compelling</strong> — judges miss the core demo moment</td>
+        <td><span class="risk-tag risk-l">LOW</span></td>
+        <td>Use notebook markdown + colour-coded output cells. Print closed-world result first ("RESULT: 0 rows"), then RKG result with confidence score prominently formatted. Make it impossible to miss.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout mt2">
+    <strong>Decision point:</strong> At the end of Phase 2, before writing a single line of agent code, run the anomaly score query against all seed entities. If known-bad SKUs are NOT in the top decile, stop and fix the seed data or the REL_WEIGHTS before proceeding. The agent pipeline is worthless without a signal to work from.
+  </div>
+</section>
+
+<footer>
+  <div class="footer-left">RKG POC · Architecture Document · VOR Hackathon 2025</div>
+  <div class="footer-right">Internal Use Only · Not for Distribution</div>
+</footer>
+
+</body>
+</html>

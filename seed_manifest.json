@@ -1,0 +1,635 @@
+{
+  "cohort_tag": "ACME_ONBOARDING",
+  "cohort_size": 300,
+  "planted": [
+    {
+      "sku_id": "2635",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2769",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2539",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2616",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2529",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2780",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2722",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2649",
+      "anomaly_type": "brand_mismatch"
+    },
+    {
+      "sku_id": "2506",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2755",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2515",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2826",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2632",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2750",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2735",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2828",
+      "anomaly_type": "merge_conflict"
+    },
+    {
+      "sku_id": "2822",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2541",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2688",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2703",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2775",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2481",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2754",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2781",
+      "anomaly_type": "evidence_gap"
+    },
+    {
+      "sku_id": "2674",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2662",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2776",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2736",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2613",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2486",
+      "anomaly_type": "shared_sku"
+    },
+    {
+      "sku_id": "2813",
+      "anomaly_type": "auto_map_error"
+    },
+    {
+      "sku_id": "2652",
+      "anomaly_type": "auto_map_error"
+    },
+    {
+      "sku_id": "2720",
+      "anomaly_type": "auto_map_error"
+    },
+    {
+      "sku_id": "2532",
+      "anomaly_type": "auto_map_error"
+    }
+  ],
+  "top_decile_types": [
+    "brand_mismatch",
+    "merge_conflict",
+    "evidence_gap",
+    "shared_sku",
+    "auto_map_error"
+  ],
+  "healthy": [
+    "2761",
+    "2711",
+    "2782",
+    "2636",
+    "2644",
+    "2567",
+    "2783",
+    "2772",
+    "2806",
+    "2599",
+    "2798",
+    "2629",
+    "2791",
+    "2689",
+    "2738",
+    "2575",
+    "2487",
+    "2799",
+    "2518",
+    "2763",
+    "2642",
+    "2668",
+    "2683",
+    "2634",
+    "2815",
+    "2719",
+    "2762",
+    "2773",
+    "2564",
+    "2786",
+    "2758",
+    "2747",
+    "2766",
+    "2661",
+    "2591",
+    "2737",
+    "2552",
+    "2660",
+    "2800",
+    "2801",
+    "2757",
+    "2490",
+    "2663",
+    "2627",
+    "2805",
+    "2686",
+    "2796",
+    "2681",
+    "2687",
+    "2752",
+    "2678",
+    "2740",
+    "2528",
+    "2819",
+    "2830",
+    "2592",
+    "2707",
+    "2797",
+    "2739",
+    "2612",
+    "2570",
+    "2667",
+    "2618",
+    "2771",
+    "2615",
+    "2691",
+    "2624",
+    "2745",
+    "2742",
+    "2725",
+    "2603",
+    "2676",
+    "2530",
+    "2509",
+    "2596",
+    "2582",
+    "2611",
+    "2653",
+    "2756",
+    "2721",
+    "2684",
+    "2810",
+    "2734",
+    "2633",
+    "2749",
+    "2790",
+    "2651",
+    "2491",
+    "2650",
+    "2598",
+    "2811",
+    "2527",
+    "2488",
+    "2584",
+    "2604",
+    "2708",
+    "2753",
+    "2485",
+    "2827",
+    "2609",
+    "2784",
+    "2779",
+    "2774",
+    "2623",
+    "2700",
+    "2569",
+    "2785",
+    "2602",
+    "2519",
+    "2658",
+    "2561",
+    "2657",
+    "2777",
+    "2480",
+    "2768",
+    "2698",
+    "2817",
+    "2601",
+    "2760",
+    "2614",
+    "2731",
+    "2714",
+    "2524",
+    "2483",
+    "2671",
+    "2590",
+    "2792",
+    "2816",
+    "2696",
+    "2804",
+    "2626",
+    "2730",
+    "2682",
+    "2637",
+    "2787",
+    "2690",
+    "2543",
+    "2520",
+    "2829",
+    "2512",
+    "2655",
+    "2659",
+    "2717",
+    "2741",
+    "2619",
+    "2732",
+    "2712",
+    "2638",
+    "2679",
+    "2718",
+    "2666",
+    "2673",
+    "2789",
+    "2535",
+    "2593",
+    "2538",
+    "2646",
+    "2694",
+    "2812",
+    "2656",
+    "2697",
+    "2729",
+    "2733",
+    "2794",
+    "2675",
+    "2574",
+    "2820",
+    "2808",
+    "2631",
+    "2606",
+    "2489",
+    "2778",
+    "2495",
+    "2728",
+    "2726",
+    "2610",
+    "2705",
+    "2576",
+    "2802",
+    "2793",
+    "2693",
+    "2595",
+    "2770",
+    "2647",
+    "2764",
+    "2585",
+    "2716",
+    "2665",
+    "2555",
+    "2767",
+    "2685",
+    "2505",
+    "2695",
+    "2803",
+    "2709",
+    "2594",
+    "2701",
+    "2573",
+    "2617",
+    "2622",
+    "2548",
+    "2621",
+    "2743",
+    "2692",
+    "2645",
+    "2825",
+    "2625",
+    "2516",
+    "2751",
+    "2580",
+    "2748",
+    "2507",
+    "2600",
+    "2727",
+    "2579",
+    "2699",
+    "2492",
+    "2502",
+    "2710",
+    "2795",
+    "2677",
+    "2715",
+    "2680",
+    "2546",
+    "2723",
+    "2587",
+    "2765",
+    "2511",
+    "2664",
+    "2706",
+    "2713",
+    "2568",
+    "2724",
+    "2818",
+    "2824",
+    "2702",
+    "2639",
+    "2605",
+    "2807",
+    "2704",
+    "2821",
+    "2608",
+    "2484",
+    "2672",
+    "2759",
+    "2641",
+    "2744",
+    "2823",
+    "2630",
+    "2494",
+    "2788",
+    "2648",
+    "2640",
+    "2566",
+    "2496",
+    "2501",
+    "2746",
+    "2559",
+    "2809",
+    "2571",
+    "2597",
+    "2643",
+    "2654",
+    "2670",
+    "2493",
+    "2578"
+  ],
+  "ground_truth": [
+    {
+      "sku_id": "2635",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2769",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2539",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2616",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2529",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2780",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2722",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2649",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2506",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2755",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2515",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2826",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2632",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2750",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2735",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2828",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2822",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2541",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2688",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2703",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2775",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2481",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2754",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2781",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2674",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2662",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2776",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2736",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2613",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2486",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2813",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2652",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2720",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2532",
+      "label": "confirmed_anomaly"
+    },
+    {
+      "sku_id": "2761",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2711",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2782",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2636",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2644",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2567",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2783",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2772",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2806",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2599",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2798",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2629",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2791",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2689",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2738",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2575",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2487",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2799",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2518",
+      "label": "valid"
+    },
+    {
+      "sku_id": "2763",
+      "label": "valid"
+    }
+  ]
+}

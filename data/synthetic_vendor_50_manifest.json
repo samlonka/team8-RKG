@@ -1,0 +1,518 @@
+{
+  "warehouse": "SYNTH TEST VENDOR",
+  "total_rows": 50,
+  "buckets": {
+    "exact_match": 20,
+    "brand_only": 10,
+    "package_only": 10,
+    "no_match": 10
+  },
+  "anomaly_hints": {
+    "healthy_baseline": 20,
+    "brand_mismatch": 10,
+    "auto_map_error": 10,
+    "evidence_gap": 10
+  },
+  "rows": [
+    {
+      "product_id": "SYNTH-EX001",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "2712",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "ALANI_ENERGY_COSMIC_STARDUST",
+      "vendor_package": "2/12 12 OZ CAN",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX002",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3753466",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "BUZZBALL_BIGGIES_PINK_LEMON_SQUEEZY_TRAY_PACKEZY_TRAY_PACK",
+      "vendor_package": "1.5LT",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX003",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "6344",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "DT_MDEW",
+      "vendor_package": "2L PL 1/8S",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX004",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "8627",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "PB_FANTA_ORG",
+      "vendor_package": "12-OZ ALUM CAN NR 20-PK 20 PPB*",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX005",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3749598",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "MIKES_MXD_LONG_ISLAND_TEA_6_4_12_Z",
+      "vendor_package": "24/16",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX006",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3715845",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "GOAT_ISLAND_BIG_BRIDGE",
+      "vendor_package": "4/6/12Z CAN",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX007",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "9503",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "PADE_ZERO_STRBY",
+      "vendor_package": "32-OZ PLAS BTL NR PROP 1-LS 15",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX008",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3743867",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "BLINDER_LEMON_LEMONADE",
+      "vendor_package": "12_24_OZ_CAN",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX009",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "9705",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "MUSCLE_MNSTRCHOSHAKE",
+      "vendor_package": "15-OZ ALUM CAN NR 4-PK 24 PPB",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX010",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3749633",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "BLAKES_HARD_CIDER_FULLY_LOADED_2_12_Z",
+      "vendor_package": "24/12",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX011",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3748881",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "ROGUE_DEAD_GUY",
+      "vendor_package": "4/6/12Z BTL",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX012",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3714942",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "MDEW_AMP_GFC_OGST",
+      "vendor_package": "16OZ CN 1/12",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX013",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3745827",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "BUD_LIGHT_SLTZ_TEA_LMNDE",
+      "vendor_package": "1x24 12oz Can",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX014",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3745839",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "WC_TEQULIA_SMASH_VP",
+      "vendor_package": "3x8 12oz Can",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX015",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3715296",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "PULPOLOCO_WHITE_SANGRIA",
+      "vendor_package": "1/12/8.4Z CAN",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX016",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "9852",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "GLACEVITMNWTRBREEZE",
+      "vendor_package": "32-OZ PLAS BTL NR 1-LS 15",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX017",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3745136",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "STELLA_ROSA_RED",
+      "vendor_package": "1x12 750ml Btl",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX018",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "9771",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "SPRITE_LBRNS_MX",
+      "vendor_package": "2-LTR PLAS BTL NR DMPL 1-LS 8",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX019",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3753547",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "SUTTER_HOME187_FC_MERLOT",
+      "vendor_package": "187ML",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-EX020",
+      "category": "exact_match",
+      "anomaly_hint": "healthy_baseline",
+      "expected_master_sku_id": "3721000",
+      "expected_ingest_action": "AUTO_MATCH",
+      "vendor_brand": "REDBULL_WILD_PINK_BERRIES",
+      "vendor_package": "RB 12Z 4PKS",
+      "notes": "Brand, package, UPC, dimensions from master."
+    },
+    {
+      "product_id": "SYNTH-BR001",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "FRAP_MCH",
+      "vendor_package": "9.5OZ NR 15/1",
+      "notes": "Same brand 'FRAP_MCH', wrong package '9.5OZ NR 15/1'."
+    },
+    {
+      "product_id": "SYNTH-BR002",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "ISLAND_COASTAL_LAGER",
+      "vendor_package": "4/6/12OZ CAN",
+      "notes": "Same brand 'ISLAND_COASTAL_LAGER', wrong package '4/6/12OZ CAN'."
+    },
+    {
+      "product_id": "SYNTH-BR003",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "ELECTRIC_MONKEY_WILD_ENERGY",
+      "vendor_package": "1x24 7.5oz Can",
+      "notes": "Same brand 'ELECTRIC_MONKEY_WILD_ENERGY', wrong package '1x24 7.5oz Can'."
+    },
+    {
+      "product_id": "SYNTH-BR004",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "MDEW_MJR_MLN",
+      "vendor_package": "16.9OZ PL PK 6/4S",
+      "notes": "Same brand 'MDEW_MJR_MLN', wrong package '16.9OZ PL PK 6/4S'."
+    },
+    {
+      "product_id": "SYNTH-BR005",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "PRPL_KW_STW",
+      "vendor_package": "1L PL 1/12",
+      "notes": "Same brand 'PRPL_KW_STW', wrong package '1L PL 1/12'."
+    },
+    {
+      "product_id": "SYNTH-BR006",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "WICKED_WEED_FREAK_OF_NATURE",
+      "vendor_package": "15/1/19.2 CAN",
+      "notes": "Same brand 'WICKED_WEED_FREAK_OF_NATURE', wrong package '15/1/19.2 CAN'."
+    },
+    {
+      "product_id": "SYNTH-BR007",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "PILSNER",
+      "vendor_package": "4/6/11.2 BTL MC",
+      "notes": "Same brand 'PILSNER', wrong package '4/6/11.2 BTL MC'."
+    },
+    {
+      "product_id": "SYNTH-BR008",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "POLAR_SELTZER_CRANBERRY_LIME",
+      "vendor_package": "2/12/12 CAN No Tray",
+      "notes": "Same brand 'POLAR_SELTZER_CRANBERRY_LIME', wrong package '2/12/12 CAN No Tray'."
+    },
+    {
+      "product_id": "SYNTH-BR009",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "BOLD_ROCK_BERRY_PEACH_CIDER",
+      "vendor_package": "1/6 BBL",
+      "notes": "Same brand 'BOLD_ROCK_BERRY_PEACH_CIDER', wrong package '1/6 BBL'."
+    },
+    {
+      "product_id": "SYNTH-BR010",
+      "category": "brand_only",
+      "anomaly_hint": "brand_mismatch",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "RED_OAK_NOBLE_PILS",
+      "vendor_package": "50L BBL",
+      "notes": "Same brand 'RED_OAK_NOBLE_PILS', wrong package '50L BBL'."
+    },
+    {
+      "product_id": "SYNTH-PK001",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "DOT_S_PRETZELS_ORIGINAL",
+      "vendor_package": "6/10/1OZ SNACK MULTIPAC",
+      "notes": "Shared package '6/10/1OZ SNACK MULTIPAC', brand 'DOT_S_PRETZELS_ORIGINAL' vs master 'DOT_S_PRETZELS_HONEY_MUSTARD'."
+    },
+    {
+      "product_id": "SYNTH-PK002",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "LITE",
+      "vendor_package": "4/6/16oz CN",
+      "notes": "Shared package '4/6/16oz CN', brand 'LITE' vs master 'ICEHOUSE'."
+    },
+    {
+      "product_id": "SYNTH-PK003",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "SCHILLING_LOCAL_LEGEND",
+      "vendor_package": "24/16OZ CN",
+      "notes": "Shared package '24/16OZ CN', brand 'SCHILLING_LOCAL_LEGEND' vs master 'GEORGETOWN_BODHIZA_IPA'."
+    },
+    {
+      "product_id": "SYNTH-PK004",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "BUD_LIGHT_CHELADA",
+      "vendor_package": "2_12_12_OZ_CAN",
+      "notes": "Shared package '2_12_12_OZ_CAN', brand 'BUD_LIGHT_CHELADA' vs master 'APPALACHIAN_SOUTHERN_APPLE_CIDER'."
+    },
+    {
+      "product_id": "SYNTH-PK005",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "LEINE_JUICY_PEACH",
+      "vendor_package": "2/12/12 CAN MC",
+      "notes": "Shared package '2/12/12 CAN MC', brand 'LEINE_JUICY_PEACH' vs master 'SIMPLY_LIMEADE'."
+    },
+    {
+      "product_id": "SYNTH-PK006",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "HIGH_RISE_10_MG_CITRUS_INFUSED_SPIRIT_6_BY",
+      "vendor_package": "6_750ML_BOTTLE",
+      "notes": "Shared package '6_750ML_BOTTLE', brand 'HIGH_RISE_10_MG_CITRUS_INFUSED_SPIRIT_6_BY' vs master 'HIGH_RISE_5_MG_CITRUS_INFUSED_SPIRIT_6_BY'."
+    },
+    {
+      "product_id": "SYNTH-PK007",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "SEAGRAMS_SPIKED_RUMBLE_PUNCH",
+      "vendor_package": "24/7.5Z",
+      "notes": "Shared package '24/7.5Z', brand 'SEAGRAMS_SPIKED_RUMBLE_PUNCH' vs master 'SEAGRAMS_SPIKED_PINEAPPLE_POWERHOUSE'."
+    },
+    {
+      "product_id": "SYNTH-PK008",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "LIT_WHT_RAZ",
+      "vendor_package": "16.9OZ PL 24/1",
+      "notes": "Shared package '16.9OZ PL 24/1', brand 'LIT_WHT_RAZ' vs master 'DT_PEPSI_ORIG'."
+    },
+    {
+      "product_id": "SYNTH-PK009",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "GLACEAU_VWTR_ENERGY",
+      "vendor_package": "32-OZ PLAS BTL NR 1-LS 15",
+      "notes": "Shared package '32-OZ PLAS BTL NR 1-LS 15', brand 'GLACEAU_VWTR_ENERGY' vs master 'VW_RFRSH'."
+    },
+    {
+      "product_id": "SYNTH-PK010",
+      "category": "package_only",
+      "anomaly_hint": "auto_map_error",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "REVIEW_QUEUE",
+      "vendor_brand": "TWYST_POWDER_PINEAPPLE_HABANERO",
+      "vendor_package": "4/8/6PK BOX",
+      "notes": "Shared package '4/8/6PK BOX', brand 'TWYST_POWDER_PINEAPPLE_HABANERO' vs master 'TWYST_POWDER_PEACH_LAVENDER_HONEY'."
+    },
+    {
+      "product_id": "SYNTH-NM001",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_001",
+      "vendor_package": "NOT_IN_MASTER_PKG_2824",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM002",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_002",
+      "vendor_package": "NOT_IN_MASTER_PKG_1409",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM003",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_003",
+      "vendor_package": "NOT_IN_MASTER_PKG_5506",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM004",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_004",
+      "vendor_package": "NOT_IN_MASTER_PKG_5012",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM005",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_005",
+      "vendor_package": "NOT_IN_MASTER_PKG_4657",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM006",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_006",
+      "vendor_package": "NOT_IN_MASTER_PKG_3286",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM007",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_007",
+      "vendor_package": "NOT_IN_MASTER_PKG_2679",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM008",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_008",
+      "vendor_package": "NOT_IN_MASTER_PKG_9935",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM009",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_009",
+      "vendor_package": "NOT_IN_MASTER_PKG_2424",
+      "notes": "Synthetic brand/package; should create draft."
+    },
+    {
+      "product_id": "SYNTH-NM010",
+      "category": "no_match",
+      "anomaly_hint": "evidence_gap",
+      "expected_master_sku_id": "",
+      "expected_ingest_action": "CREATE_NEW",
+      "vendor_brand": "ZZZ_SYNTH_VENDOR_010",
+      "vendor_package": "NOT_IN_MASTER_PKG_7912",
+      "notes": "Synthetic brand/package; should create draft."
+    }
+  ]
+}
