@@ -15,6 +15,7 @@ Strategy by task_type:
 
 from __future__ import annotations
 
+from agents.llm import bedrock_model_label, get_llm
 from agents.models import QuerySpec, QueryTask, TaskList
 
 # ── Neo4j vector index names (must match 01_schema.py) ───────────────────────
@@ -210,11 +211,9 @@ class PlannerAgent:
     """
     Agent 2 — Query Decomposer.
 
-    Converts a QuerySpec into an ordered TaskList.
-    Template-based for reliability in the POC — no LLM call needed here.
-
-    WHY: The Planner's job is mechanical — map task_type to known Cypher patterns.
-    Introducing an LLM here adds latency and failure modes without benefit for the POC.
+    Converts a QuerySpec into an ordered TaskList (Cypher + ANN steps).
+    Bedrock (Claude Opus 4.7) produces a required rationale for the plan; execution
+    steps remain template-based for reproducible graph access.
     """
 
     def plan(self, spec: QuerySpec) -> TaskList:
@@ -231,6 +230,16 @@ class PlannerAgent:
         print(f"  [Planner] → {len(task_list.tasks)} tasks planned:")
         for t in task_list.tasks:
             print(f"    Step {t.step}: [{t.task_type}] {t.description}")
+
+        steps = "\n".join(f"  {t.step}. [{t.task_type}] {t.description}" for t in task_list.tasks)
+        task_list.llm_rationale = get_llm().complete(
+            f"Summarize this reflexive-KG query plan in 2 sentences for an analyst.\n"
+            f"task_type={spec.task_type} depth={spec.traversal_depth} anchor={spec.anchor_entity_id}\n"
+            f"Steps:\n{steps}",
+            system="You are the Planner agent for a SKU knowledge graph. Be concise.",
+            max_tokens=200,
+        )
+        print(f"  [Planner] Rationale ({bedrock_model_label()}): {task_list.llm_rationale[:120]}...")
         return task_list
 
     # ── Root cause: backward trace + reflect ANN ──────────────────────────────

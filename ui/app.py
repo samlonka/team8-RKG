@@ -84,7 +84,7 @@ def init_session():
         "last_ab_result": None,
         "last_closed": None,
         "force_scenario": None,
-        "use_llm": False,
+        "use_llm": True,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -102,10 +102,8 @@ def sidebar():
         st.sidebar.error(f"Neo4j: {msg}")
         st.sidebar.info("Start Neo4j and run `python 05_synthesize_lifecycle.py`")
 
-    st.session_state.use_llm = st.sidebar.toggle(
-        "Use LLM Supervisor (Bedrock)",
-        value=st.session_state.use_llm,
-    )
+    st.sidebar.caption("Agents use **Bedrock Claude Opus 4.7** (required).")
+    st.session_state.use_llm = True
 
     try:
         stats = cohort_stats()
@@ -424,7 +422,7 @@ def page_preflight():
 
         pipeline = importlib.import_module("04_agent_pipeline")
         with quiet_pipeline():
-            r = pipeline.run_lifecycle_pipeline(1, use_llm=False)
+            r = pipeline.run_lifecycle_pipeline(1, use_llm=True)
         brand_ok = bool(r.critic_result.validated)
         brand_detail = (
             f"Confidence {r.critic_result.validated[0].confidence:.3f}"

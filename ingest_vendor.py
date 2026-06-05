@@ -33,6 +33,8 @@ Usage:
     python ingest_vendor.py --approve <product_id>   # approve top match candidate
     python ingest_vendor.py --reject  <product_id>   # reject all candidates → draft
     python ingest_vendor.py --report                 # show last ingestion run summary
+
+See README.md — "Process a new vendor SKU Excel" for status meanings and workflow.
 """
 
 from __future__ import annotations

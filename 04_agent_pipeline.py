@@ -30,6 +30,7 @@ import time
 
 from neo4j import GraphDatabase
 
+from agents.llm import bedrock_model_label, get_llm
 from agents.supervisor import SupervisorAgent
 from agents.planner    import PlannerAgent
 from agents.doer       import DoerAgent
@@ -212,6 +213,8 @@ def run_pipeline(
         return run_lifecycle_pipeline(scenario_num, question, use_llm=use_llm)
 
     start = time.time()
+    get_llm()
+    print(f"[Pipeline] LLM: {bedrock_model_label()}")
 
     supervisor = SupervisorAgent(use_llm=use_llm)
     planner    = PlannerAgent()
@@ -353,13 +356,11 @@ def main():
                         help="Run all 6 demo scenarios")
     parser.add_argument("--ab",       action="store_true",
                         help="Run A/B comparison only (Scenario 4)")
-    parser.add_argument("--no-llm",  action="store_true",
-                        help="Use heuristic parser instead of Claude API")
     parser.add_argument("--bench",   action="store_true",
                         help="Run all scenarios and print benchmark table")
     args = parser.parse_args()
 
-    use_llm = not args.no_llm
+    use_llm = True
 
     if args.ask:
         result = run_pipeline(args.ask, use_llm=use_llm)

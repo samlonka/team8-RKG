@@ -28,6 +28,7 @@ from agents.models import (
     CandidateChain, ValidatedChain, RejectedChain,
     CriticResult, EntityNode,
 )
+from agents.llm import get_llm
 from config import (
     CRITIC_CONFIDENCE_THRESHOLD,
     MIN_ENTITIES_PER_HOP,
@@ -188,6 +189,24 @@ def _build_reasoning(
     return " ".join(parts)
 
 
+def _llm_reasoning(chain: CandidateChain, base: str, confidence: float) -> str:
+    """Bedrock narrative for the validated chain (required; no heuristic fallback)."""
+    path_summary = " → ".join(
+        f"{n.label}:{n.display_name}" for n in chain.path[:8]
+    )
+    extra = ""
+    if len(chain.path) > 8:
+        extra = f" (+{len(chain.path) - 8} more hops)"
+    return get_llm().complete(
+        f"Evidence chain (confidence {confidence:.3f}):\n{path_summary}{extra}\n\n"
+        f"Rule-based summary: {base}\n\n"
+        "Write 2-3 sentences explaining why this chain is trustworthy or needs review. "
+        "Mention temporal ordering, evidence density, and anomaly signal.",
+        system="You are the Critic agent for a reflexive SKU knowledge graph.",
+        max_tokens=256,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CRITIC AGENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,6 +266,7 @@ class CriticAgent:
                 continue
 
             reasoning = _build_reasoning(chain, temporal, density, anomaly, conf)
+            reasoning = _llm_reasoning(chain, reasoning, conf)
 
             validated.append(ValidatedChain(
                 chain_id=chain.chain_id,

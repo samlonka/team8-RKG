@@ -6,12 +6,12 @@ Pipeline:
   2. Search  — ANN on Neo4j vector index + brand/package graph lookups
   3. Enrich  — fetch anomaly_attn and reflect_emb from KG per candidate
   4. Score   — composite: ANN sim + graph boost + reflect sim − anomaly penalty
-  5. Critic  — validate candidates, produce reasoning (LLM or heuristic)
+  5. Critic  — validate candidates, produce reasoning (Bedrock Opus 4.7, required)
   6. Route   — merged / updated / insert
 
 Graceful degradation:
   - Neo4j unavailable → falls back to string-matching (api/main.py logic)
-  - Bedrock unavailable → uses heuristic reasoning text
+  - Bedrock unavailable → raises LLMError (no heuristic reasoning fallback)
   - sentence-transformers unavailable → falls back to string matching
 """
 
@@ -362,7 +362,7 @@ def _composite_score(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — CRITIC (heuristic + optional LLM)
+# STEP 5 — CRITIC (Bedrock reasoning, required when KG path is used)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _heuristic_reasoning(
@@ -419,26 +419,22 @@ def _heuristic_reasoning(
 def _llm_reasoning(
     brand_name: str, package_type: str, best: dict, score: float,
     status: str, all_candidates: list[dict],
-) -> str | None:
-    """Call Bedrock LLM to produce a rich reasoning explanation."""
-    try:
-        from agents.llm import get_llm
-        llm = get_llm()
-        if not llm.available:
-            return None
+) -> str:
+    """Bedrock (Claude Opus 4.7) reasoning for the match decision — required."""
+    from agents.llm import get_llm
 
-        top3 = all_candidates[:3]
-        cand_text = "\n".join(
-            f"  - SKU {c.get('sku_id')}: brand={c.get('brand_name')}, "
-            f"package={c.get('package_category_name')}, "
-            f"score={c.get('composite_score', 0):.4f}, "
-            f"ann={c.get('ann_sim', 0):.3f}, "
-            f"reflect={c.get('reflect_sim', 0):.3f}, "
-            f"anomaly_attn={c.get('anomaly_attn', 0):.3f}"
-            for c in top3
-        )
+    top3 = all_candidates[:3]
+    cand_text = "\n".join(
+        f"  - SKU {c.get('sku_id')}: brand={c.get('brand_name')}, "
+        f"package={c.get('package_category_name')}, "
+        f"score={c.get('composite_score', 0):.4f}, "
+        f"ann={c.get('ann_sim', 0):.3f}, "
+        f"reflect={c.get('reflect_sim', 0):.3f}, "
+        f"anomaly_attn={c.get('anomaly_attn', 0):.3f}"
+        for c in top3
+    )
 
-        prompt = f"""You are a SKU data-quality agent for a beverage distribution company.
+    prompt = f"""You are a SKU data-quality agent for a beverage distribution company.
 
 A new product entry needs to be matched against the Master Global SKU database.
 
@@ -458,9 +454,7 @@ Explain in 2-3 sentences WHY this match decision was made. Mention:
 
 Be concise and specific. Do not repeat the numbers verbatim."""
 
-        return llm.complete(prompt, max_tokens=256, temperature=0.0)
-    except Exception:
-        return None
+    return get_llm().complete(prompt, max_tokens=256)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -562,10 +556,7 @@ def agent_match(
     else:
         status = "insert"
 
-    reasoning = (
-        _llm_reasoning(brand_name, package_type, best, score, status, ranked)
-        or _heuristic_reasoning(brand_name, package_type, best, score, status, brand_ids, pkg_quality)
-    )
+    reasoning = _llm_reasoning(brand_name, package_type, best, score, status, ranked)
 
     # ── Step 6: Build response ────────────────────────────────────────────────
     matched_skus = [

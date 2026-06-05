@@ -7,18 +7,30 @@ Runs the four-agent pipeline on the lifecycle graph and asserts:
   #8  Scenario 3 returns a top-20 at-risk ranking
   #9  Scenario 4 A/B: closed-world query = 0 rows, reflexive = validated chain
   #10 Critic rejects a weak chain (< 0.65)
-Also checks the Supervisor parse (Bedrock Sonnet 4.6 when available, else heuristic).
+Also checks the Supervisor parse (Bedrock Claude Opus 4.7 — skipped if AWS/Bedrock unavailable).
+
+Requires Bedrock model access in us-east-1 (or BEDROCK_REGION).
 
 Run:  python -m pytest test_agents.py -v
 """
 import importlib
+
+import pytest
 from neo4j import GraphDatabase
 
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from agents.critic import CriticAgent
+from agents.llm import LLMError, get_llm
 from agents.models import CandidateChain, EntityNode
 
 scen = importlib.import_module("07_agent_scenarios")
+
+
+def _require_bedrock():
+    try:
+        get_llm()
+    except LLMError as e:
+        pytest.skip(str(e))
 
 
 def _session():
@@ -27,11 +39,13 @@ def _session():
 
 
 def test_supervisor_parse():
+    _require_bedrock()
     spec = scen.supervise("Why is this customer's model underperforming after import?")
     assert spec.task_type in ("root_cause", "risk_rank", "anomaly_explain")
 
 
 def test_scenario1_brand_mismatch_validated():       # criterion #6
+    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).brand_mismatch_chain()
@@ -44,6 +58,7 @@ def test_scenario1_brand_mismatch_validated():       # criterion #6
 
 
 def test_scenario2_multi_signal():                   # criterion #7
+    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).multi_signal_chain()
@@ -67,6 +82,7 @@ def test_scenario3_top20_rank():                     # criterion #8
 
 
 def test_scenario4_ab_comparison():                  # criterion #9
+    _require_bedrock()
     d, s = _session()
     try:
         doer = scen.Doer(s)
@@ -89,6 +105,7 @@ def test_critic_rejects_weak_chain():                # criterion #10
 
 
 def test_scenario5_shared_sku_validated():
+    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).shared_sku_chain()
@@ -101,6 +118,7 @@ def test_scenario5_shared_sku_validated():
 
 
 def test_scenario6_auto_map_validated():
+    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).auto_map_chain()

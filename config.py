@@ -131,6 +131,10 @@ MATCH_REVIEW_THRESHOLD    = 0.65   # confidence ≥ this → human review queue
 MATCH_ANN_TOP_K           = 10     # ANN candidates per VendorSKU
 MATCH_ANOMALY_ALERT_DELTA = 0.10   # flag GlobalSKU if anomaly_attn rises by ≥ this after ingest
 
+# ── Bedrock LLM (all agents — Claude Opus 4.7, no heuristic fallback) ───────
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-opus-4-7")
+BEDROCK_REGION   = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+
 # ── Batch processing ──────────────────────────────────────────────────────────
 EMBED_BATCH_SIZE = 64   # sentence-transformer batch size
 

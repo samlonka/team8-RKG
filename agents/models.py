@@ -80,6 +80,7 @@ class TaskList:
     """Ordered list of QueryTask objects. Produced by the Planner."""
     spec:  QuerySpec
     tasks: list[QueryTask] = field(default_factory=list)
+    llm_rationale: str = ""   # Bedrock summary of the planned retrieval strategy
 
 
 # ─────────────────────────────────────────────────────────────────────────────
