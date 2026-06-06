@@ -17,6 +17,7 @@ Graceful degradation:
 
 from __future__ import annotations
 
+import difflib
 import importlib
 import math
 import sys
@@ -184,28 +185,130 @@ def _ann_candidates(session, emb: np.ndarray, top_k: int = MATCH_ANN_TOP_K) -> l
         return []
 
 
+_BRAND_FUZZY_THRESHOLD   = 0.75
+_PACKAGE_FUZZY_THRESHOLD = 0.75
+
+
 def _brand_block(session, brand_name: str) -> list[str]:
     """
     GlobalSKU IDs whose brand_name matches the query.
 
-    Searches GlobalSKU.brand_name directly (most reliable) since Brand nodes
-    use brand_family which is often 'UNKNOWN' in this dataset.
+    Step 1 — exact case-insensitive match in Neo4j.
+    Step 2 — if no exact hits, fetch all distinct brand_names and apply
+             Python difflib fuzzy matching (ratio ≥ _BRAND_FUZZY_THRESHOLD),
+             then fetch SKU IDs for the matched names.
     """
     try:
+        # Step 1: exact match
         rows = session.run(
             """
             MATCH (g:GlobalSKU)
             WHERE toUpper(g.brand_name) = toUpper($brand)
-               OR toUpper(g.brand_name) CONTAINS toUpper($brand)
-               OR toUpper($brand) CONTAINS toUpper(g.brand_name)
             RETURN DISTINCT g.sku_id AS sid
             LIMIT 50
             """,
             brand=brand_name,
         ).data()
+        if rows:
+            return [r["sid"] for r in rows]
+
+        # Step 2: fuzzy fallback — no native Neo4j fuzzy without APOC,
+        # so fetch all distinct brand names and match in Python.
+        all_brands = session.run(
+            "MATCH (g:GlobalSKU) WHERE g.brand_name IS NOT NULL "
+            "RETURN DISTINCT g.brand_name AS bn"
+        ).data()
+
+        q = brand_name.upper()
+        matched = [
+            r["bn"] for r in all_brands
+            if difflib.SequenceMatcher(None, q, (r["bn"] or "").upper()).ratio()
+            >= _BRAND_FUZZY_THRESHOLD
+        ]
+        if not matched:
+            return []
+
+        rows = session.run(
+            "MATCH (g:GlobalSKU) WHERE g.brand_name IN $brands "
+            "RETURN DISTINCT g.sku_id AS sid LIMIT 50",
+            brands=matched,
+        ).data()
         return [r["sid"] for r in rows]
+
     except Exception:
         return []
+
+
+# ── Package-type word-to-number canonicalization ──────────────────────────────
+# Converts English number words to digits so that "Sixteen OZ CN One/12" and
+# "16OZ CN 1/12" reduce to the same canonical string "16OZCN1/12".
+# Applied to BOTH query and graph values before any comparison (bidirectional).
+
+# Space-separated multi-word phrases — must be checked before token-level split.
+# Longer phrases listed first to avoid partial substitution ("twenty four" before "four").
+_PKG_PHRASE_MAP: list[tuple[str, str]] = [
+    ("twenty one", "21"),    ("twenty two", "22"),    ("twenty three", "23"),
+    ("twenty four", "24"),   ("twenty five", "25"),   ("twenty six", "26"),
+    ("twenty seven", "27"),  ("twenty eight", "28"),  ("twenty nine", "29"),
+    ("thirty one", "31"),    ("thirty two", "32"),    ("thirty three", "33"),
+    ("thirty four", "34"),   ("thirty five", "35"),   ("thirty six", "36"),
+    ("sixty four", "64"),    ("one hundred", "100"),
+]
+
+# Single-token words (plain and hyphenated forms).
+_PKG_WORD_TO_NUM: dict[str, str] = {
+    "zero": "0",     "one": "1",       "two": "2",       "three": "3",
+    "four": "4",     "five": "5",      "six": "6",       "seven": "7",
+    "eight": "8",    "nine": "9",      "ten": "10",      "eleven": "11",
+    "twelve": "12",  "thirteen": "13", "fourteen": "14", "fifteen": "15",
+    "sixteen": "16", "seventeen": "17","eighteen": "18", "nineteen": "19",
+    "twenty": "20",  "thirty": "30",   "forty": "40",    "fifty": "50",
+    "sixty": "60",   "seventy": "70",  "eighty": "80",   "ninety": "90",
+    "hundred": "100",
+    # Hyphenated compound forms
+    "twenty-one": "21",   "twenty-two": "22",   "twenty-three": "23",
+    "twenty-four": "24",  "twenty-five": "25",  "twenty-six": "26",
+    "twenty-seven": "27", "twenty-eight": "28", "twenty-nine": "29",
+    "thirty-one": "31",   "thirty-two": "32",   "thirty-three": "33",
+    "thirty-four": "34",  "thirty-five": "35",  "thirty-six": "36",
+    "sixty-four": "64",   "one-hundred": "100",
+}
+
+
+def _canonicalize_package(text: str) -> str:
+    """
+    Reduce a package type string to a canonical form for bidirectional comparison.
+
+    Steps:
+      1. Lowercase and phrase pre-scan (space-separated multi-word numbers).
+      2. Token-level word → digit conversion; handles "/" compound tokens.
+      3. Uppercase and strip all whitespace.
+
+    Examples:
+      "Sixteen OZ CN One/12"   → "16OZCN1/12"
+      "16OZ CN 1/12"           → "16OZCN1/12"
+      "16 OZ CN 1/12"          → "16OZCN1/12"
+      "Twenty Four OZ PL 1/6"  → "24OZPL1/6"
+      "Thirty Six OZ CN 1/12"  → "36OZCN1/12"
+    """
+    s = text.lower().strip()
+
+    # Phase 1: replace space-separated multi-word number phrases
+    for phrase, digit in _PKG_PHRASE_MAP:
+        s = s.replace(phrase, digit)
+
+    # Phase 2: token-level conversion; split "/" compound tokens independently
+    tokens = s.split()
+    normalized = []
+    for token in tokens:
+        if "/" in token:
+            parts = [_PKG_WORD_TO_NUM.get(p, p) for p in token.split("/")]
+            normalized.append("/".join(parts))
+        else:
+            normalized.append(_PKG_WORD_TO_NUM.get(token, token))
+
+    # Phase 3: uppercase and strip all whitespace
+    return "".join(normalized).upper()
 
 
 def _package_block(session, package_type: str) -> dict[str, float]:
@@ -213,24 +316,65 @@ def _package_block(session, package_type: str) -> dict[str, float]:
     GlobalSKU IDs whose package_category_name matches the query.
     Returns {sku_id: match_quality} where quality is 1.0 (exact) or 0.7 (fuzzy).
 
-    PackageType nodes store only package_type_id (name=None in this dataset),
-    so we search GlobalSKU.package_category_name directly.
+    Matching is bidirectional: both query and graph values are reduced to a
+    canonical form (digits, uppercase, no whitespace) before any comparison,
+    so "Sixteen OZ CN One/12" and "16OZ CN 1/12" resolve to the same value.
+
+    Step 1 — fast Cypher exact match: canonical query vs whitespace-stripped
+             graph value. Hits immediately when graph stores numeric form.
+    Step 2 — Python canonicalize both sides: handles graph values that store
+             English number words, plus fuzzy fallback for near-matches.
+    Step 3 — fetch SKU IDs for all matched package names.
     """
     try:
+        query_canon = _canonicalize_package(package_type)
+
+        # Step 1: exact match — canonical query vs whitespace-stripped graph value.
         rows = session.run(
             """
             MATCH (g:GlobalSKU)
-            WHERE toUpper(g.package_category_name) = toUpper($pkg)
-               OR toUpper(g.package_category_name) CONTAINS toUpper($pkg)
-               OR toUpper($pkg) CONTAINS toUpper(g.package_category_name)
-            RETURN DISTINCT g.sku_id AS sid,
-                   CASE WHEN toUpper(g.package_category_name) = toUpper($pkg) THEN 1.0
-                        ELSE 0.7 END AS quality
+            WHERE replace(toUpper(g.package_category_name), ' ', '') = $pkg_canon
+            RETURN DISTINCT g.sku_id AS sid, 1.0 AS quality
             LIMIT 50
             """,
-            pkg=package_type,
+            pkg_canon=query_canon,
         ).data()
-        return {r["sid"]: float(r["quality"]) for r in rows}
+        if rows:
+            return {r["sid"]: float(r["quality"]) for r in rows}
+
+        # Step 2: fetch all distinct package names and canonicalize both sides.
+        all_pkgs = session.run(
+            "MATCH (g:GlobalSKU) WHERE g.package_category_name IS NOT NULL "
+            "RETURN DISTINCT g.package_category_name AS pkg"
+        ).data()
+
+        pkg_quality: dict[str, float] = {}
+        for r in all_pkgs:
+            graph_pkg   = r["pkg"] or ""
+            graph_canon = _canonicalize_package(graph_pkg)
+            if not graph_canon:
+                continue
+            if query_canon == graph_canon:
+                pkg_quality[graph_pkg] = 1.0
+            elif difflib.SequenceMatcher(
+                None, query_canon, graph_canon
+            ).ratio() >= _PACKAGE_FUZZY_THRESHOLD:
+                pkg_quality[graph_pkg] = 0.7
+
+        if not pkg_quality:
+            return {}
+
+        # Step 3: fetch SKU IDs for all matched package names.
+        rows = session.run(
+            """
+            MATCH (g:GlobalSKU) WHERE g.package_category_name IN $pkgs
+            RETURN DISTINCT g.sku_id AS sid, g.package_category_name AS pkg
+            LIMIT 50
+            """,
+            pkgs=list(pkg_quality.keys()),
+        ).data()
+        return {r["sid"]: pkg_quality.get(r["pkg"], 0.7) for r in rows}
+
     except Exception:
         return {}
 
