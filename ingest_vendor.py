@@ -59,6 +59,7 @@ from config import (
     MATCH_AUTO_THRESHOLD, MATCH_REVIEW_THRESHOLD,
     MATCH_ANN_TOP_K, MATCH_ANOMALY_ALERT_DELTA,
 )
+from agents.dim_match import dim_boost, dims_from_vendor_row, has_query_dims
 
 # Modules whose names start with a digit cannot be imported with 'from X import'
 _seed  = importlib.import_module("02_seed_data")
@@ -435,8 +436,42 @@ def find_candidates(session, row: dict, emb: np.ndarray) -> list[Candidate]:
             c.signals.append("brand_block")
             c.confidence = min(c.confidence + 0.08, 0.95)
 
-    # Fetch numeric fields for top candidates and apply numeric boost
-    if merged:
+    # Fetch physical dimensions for top candidates and apply dimension boost
+    query_dims = dims_from_vendor_row(row)
+    if merged and has_query_dims(query_dims):
+        top_sids = sorted(merged, key=lambda s: merged[s].confidence, reverse=True)[:8]
+        g_rows = session.run(
+            """
+            MATCH (g:GlobalSKU) WHERE g.sku_id IN $sids
+            RETURN g.sku_id AS sid, g.units_per_case AS upc, g.weight AS wt,
+                   g.length AS ln, g.width AS wd, g.height AS ht
+            """,
+            sids=top_sids,
+        ).data()
+        for gr in g_rows:
+            sid = gr["sid"]
+            if sid not in merged:
+                continue
+            cand = merged[sid]
+            global_dims = {
+                "weight": gr.get("wt"),
+                "length": gr.get("ln"),
+                "width":  gr.get("wd"),
+                "height": gr.get("ht"),
+            }
+            if _numeric_match(row, {"units_per_case": gr.get("upc"), "weight": gr.get("wt")}):
+                cand.signals.append("numeric")
+                cand.confidence = min(cand.confidence + 0.04, 0.95)
+            boost = dim_boost(query_dims, global_dims)
+            if boost >= 0.85:
+                cand.signals.append("dim_match")
+                cand.confidence = min(cand.confidence + 0.06, 0.97)
+            elif boost >= 0.55:
+                cand.signals.append("dim_partial")
+                cand.confidence = min(cand.confidence + 0.03, 0.95)
+            elif boost > 0 and boost < 0.35:
+                cand.confidence = max(cand.confidence - 0.04, 0.0)
+    elif merged:
         top_sids = sorted(merged, key=lambda s: merged[s].confidence, reverse=True)[:5]
         g_rows = session.run(
             """

@@ -144,10 +144,12 @@ MATCH_REVIEW_THRESHOLD    = 0.65   # confidence ≥ this → human review queue
 MATCH_ANN_TOP_K           = 10     # ANN candidates per TenantSKU
 MATCH_ANOMALY_ALERT_DELTA = 0.10   # flag GlobalSKU if anomaly_attn rises by ≥ this after ingest
 
-# ── Amazon Bedrock LLM (all agents — Claude Opus 4.7, no heuristic fallback) ───────
+# ── Amazon Bedrock LLM (all four agents — Claude Opus 4.7) ───────────────────
 AWS_REGION       = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-opus-4-7")
 BEDROCK_REGION   = AWS_REGION
+# When True, Supervisor/Planner/Doer/Critic call Bedrock first; rule-based logic is fallback.
+AGENT_USE_LLM    = os.getenv("AGENT_USE_LLM", "true").lower() in ("1", "true", "yes")
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 EMBED_BATCH_SIZE = 64   # sentence-transformer batch size

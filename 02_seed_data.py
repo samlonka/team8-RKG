@@ -91,6 +91,86 @@ def normalize_global_sku_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_PKG_PATTERN = re.compile(
+    r"(\d+)/(\d+\.?\d*)(OZ|L|ML|GAL)\s*(CN|PL|BT|CAN|BTL|PKG|CS)?",
+    re.I,
+)
+
+
+def _parse_package_from_description(desc) -> dict:
+    m = _PKG_PATTERN.search(str(desc))
+    if m:
+        return {
+            "pkg_qty": int(m.group(1)),
+            "pkg_size": float(m.group(2)),
+            "pkg_unit": m.group(3).upper(),
+            "pkg_container": (m.group(4) or "").upper(),
+        }
+    return {"pkg_qty": 0, "pkg_size": 0.0, "pkg_unit": "", "pkg_container": ""}
+
+
+def _scalar_float(val, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    try:
+        if pd.isna(val):
+            return default
+    except (TypeError, ValueError):
+        pass
+    try:
+        out = float(val)
+        return default if np.isnan(out) else out
+    except (TypeError, ValueError):
+        return default
+
+
+def _scalar_int(val, default: int = 0) -> int:
+    return int(_scalar_float(val, default))
+
+
+def normalize_tenant_sku_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce tenant SKU numerics and fill missing package fields from description."""
+    df = df.copy()
+    if "tenant_sku_id" not in df.columns and "product_id" in df.columns:
+        df["tenant_sku_id"] = df["product_id"].astype(str)
+
+    for col in ["units_per_case", "unit_weight", "case_length", "case_width", "case_height", "pkg_size"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    if "pkg_qty" in df.columns:
+        df["pkg_qty"] = pd.to_numeric(df["pkg_qty"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["pkg_qty"] = 0
+
+    if "product_description" in df.columns:
+        if "pkg_unit" in df.columns:
+            missing_pkg = df["pkg_qty"].eq(0) | df["pkg_unit"].fillna("").astype(str).eq("")
+        else:
+            missing_pkg = df["pkg_qty"].eq(0)
+        if missing_pkg.any():
+            parsed = df.loc[missing_pkg, "product_description"].map(_parse_package_from_description)
+            pkg_df = pd.DataFrame(parsed.tolist(), index=df.index[missing_pkg])
+            for col in ("pkg_qty", "pkg_size", "pkg_unit", "pkg_container"):
+                if col in pkg_df.columns:
+                    df.loc[missing_pkg, col] = pkg_df[col].values
+
+    for col in ["pkg_unit", "pkg_container"]:
+        if col not in df.columns:
+            df[col] = ""
+        else:
+            df[col] = df[col].fillna("").astype(str)
+
+    for col in ["brand", "supplier", "product_class", "product_description", "warehouse", "match_method", "customer"]:
+        if col in df.columns:
+            fill = "UNKNOWN" if col in ("brand", "supplier", "product_class") else ""
+            df[col] = df[col].fillna(fill).astype(str).str.strip()
+            if col in ("brand", "supplier", "product_class"):
+                df[col] = df[col].str.upper()
+
+    return df
+
+
 def load_global_sku(path: str) -> pd.DataFrame:
     """Load Global SKU from CSV and normalize fields."""
     df = pd.read_csv(path, dtype=str, low_memory=False)
@@ -126,6 +206,7 @@ def load_tenant_sku_postgres() -> pd.DataFrame | None:
     df = load_tenant_dataframe()
     if df.empty:
         return None
+    df = normalize_tenant_sku_df(df)
     print(f"  TenantSKU loaded (PostgreSQL): {len(df):,} rows | "
           f"{df['brand'].nunique()} brands | "
           f"{df['supplier'].nunique()} suppliers | "
@@ -220,23 +301,10 @@ def load_vendor_sku(path: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     # Parse package info from description: "3D ALPHALAND 12/16Z CN"
-    # Pattern: <qty>/<size><unit> <container>
-    pkg_pattern = re.compile(r"(\d+)/(\d+\.?\d*)(OZ|L|ML|GAL)\s*(CN|PL|BT|CAN|BTL|PKG|CS)?", re.I)
-
-    def parse_package(desc):
-        m = pkg_pattern.search(str(desc))
-        if m:
-            return {
-                "pkg_qty":       int(m.group(1)),
-                "pkg_size":      float(m.group(2)),
-                "pkg_unit":      m.group(3).upper(),
-                "pkg_container": (m.group(4) or "").upper(),
-            }
-        return {"pkg_qty": 0, "pkg_size": 0.0, "pkg_unit": "", "pkg_container": ""}
-
-    pkg_info = df["product_description"].apply(parse_package).apply(pd.Series)
+    pkg_info = df["product_description"].apply(_parse_package_from_description).apply(pd.Series)
     df = pd.concat([df, pkg_info], axis=1)
 
+    df = normalize_tenant_sku_df(df)
     print(f"  TenantSKU (Excel) loaded: {len(df):,} rows | "
           f"{df['brand'].nunique()} brands | "
           f"{df['supplier'].nunique()} suppliers | "
@@ -287,7 +355,7 @@ def tenant_sku_to_text(row) -> str:
         f"supplier {row.get('supplier', 'unknown')} "
         f"class {row.get('product_class', 'unknown')} "
         f"match {row.get('match_method', 'exact')} "
-        f"units per case {int(row.get('units_per_case', 0) or 0)} "
+        f"units per case {_scalar_int(row.get('units_per_case'))} "
         f"size {row.get('pkg_size', 0)}{row.get('pkg_unit', '')} "
         f"container {container} "
         f"description {row.get('product_description', 'unknown')}"
@@ -436,16 +504,16 @@ def seed_tenant_skus(session, df: pd.DataFrame, model: SentenceTransformer):
             "warehouse":         row.get("warehouse", row.get("customer", "")),
             "match_method":      row.get("match_method", "exact"),
             "creation_date":     row.get("creation_date", ""),
-            "units_per_case":    float(row.get("units_per_case", 0) or 0),
-            "unit_weight":       float(row.get("unit_weight", 0) or 0),
-            "case_length":       float(row.get("case_length", 0) or 0),
-            "case_width":        float(row.get("case_width", 0) or 0),
-            "case_height":       float(row.get("case_height", 0) or 0),
+            "units_per_case":    _scalar_float(row.get("units_per_case")),
+            "unit_weight":       _scalar_float(row.get("unit_weight")),
+            "case_length":       _scalar_float(row.get("case_length")),
+            "case_width":        _scalar_float(row.get("case_width")),
+            "case_height":       _scalar_float(row.get("case_height")),
             "case_upc":          row.get("case_upc"),
             "retail_upc":        row.get("retail_upc"),
             "eaches_upc":        row.get("eaches_upc"),
-            "pkg_qty":           int(row.get("pkg_qty", 0) or 0),
-            "pkg_size":          float(row.get("pkg_size", 0) or 0),
+            "pkg_qty":           _scalar_int(row.get("pkg_qty")),
+            "pkg_size":          _scalar_float(row.get("pkg_size")),
             "pkg_unit":          row.get("pkg_unit", ""),
             "pkg_container":     row.get("pkg_container", ""),
             "self_emb":          embeddings[i].tolist(),

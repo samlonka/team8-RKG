@@ -15,16 +15,20 @@ Matching pipeline:
 from __future__ import annotations
 
 import difflib
+import json
+import queue
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from config import GLOBAL_SKU_CSV
-from data.master_loader import load_master_sku_records
+from data.master_loader import resolve_master_sku_records
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
@@ -37,21 +41,37 @@ UPDATE_THRESHOLD = 0.60   # ≥ this → updated (partial match)
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Reflexive KG API", version="2.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SKU_DB: list[dict] | None = None
+_SKU_DB_SOURCE: str = ""
 
 
 def _load_sku_db() -> list[dict]:
-    """Load master SKU CSV by column name (vor_sku_data.csv)."""
-    global _SKU_DB
+    """Load master GlobalSKUs — PostgreSQL master_data preferred, CSV fallback."""
+    global _SKU_DB, _SKU_DB_SOURCE
     if _SKU_DB is not None:
         return _SKU_DB
-    _SKU_DB = load_master_sku_records(BASE_DIR / GLOBAL_SKU_CSV)
+    _SKU_DB, _SKU_DB_SOURCE = resolve_master_sku_records()
     return _SKU_DB
+
+
+def master_sku_source() -> str:
+    """Human-readable label for where master SKUs were loaded from."""
+    if _SKU_DB_SOURCE:
+        return _SKU_DB_SOURCE
+    return GLOBAL_SKU_CSV
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -180,47 +200,59 @@ def _dimensional_similarity(candidate: dict, others: list[dict]) -> float:
     stand out from the rest. Higher = more distinct / better match.
     Only useful when > 1 candidate exists.
     """
+    from agents.dim_match import candidate_dims
     dims = ["weight", "height", "length", "width"]
-    has_any = any(candidate.get(d) is not None for d in dims)
+    has_any = any(candidate_dims(candidate).get(d) for d in dims)
     return 0.5 if not has_any else 0.5  # placeholder — overridden in disambiguate
 
 
 def _dim_distance(a: dict, b: dict) -> float:
-    """Euclidean distance across shared non-null dimensions."""
-    dims = ["weight", "height", "length", "width"]
-    diffs = []
-    for d in dims:
-        va, vb = a.get(d), b.get(d)
-        if va is not None and vb is not None and va > 0 and vb > 0:
-            diffs.append(((va - vb) / max(va, vb)) ** 2)
-    if not diffs:
-        return 1.0  # unknown — treat as distant
-    import math
-    return math.sqrt(sum(diffs) / len(diffs))
+    from agents.dim_match import dim_distance
+    return dim_distance(a, b)
+
+
+def _rank_string_match_candidates(
+    candidates: list[dict],
+    query_dims: dict,
+    *,
+    score_key: str = "combined_score",
+) -> tuple[list[dict], bool, str]:
+    """Apply dimension nudge/tie-break to string-match candidate rows."""
+    from agents.dim_match import apply_dimension_ranking, has_query_dims, normalize_query_dims
+
+    if len(candidates) <= 1 or not has_query_dims(query_dims):
+        return candidates, False, "none"
+
+    wrapped = []
+    for c in candidates:
+        sku = c["sku"]
+        wrapped.append({
+            **{k: sku.get(k) for k in ("weight", "height", "length", "width")},
+            score_key: c[score_key],
+            "_orig": c,
+        })
+
+    reranked, applied, mode = apply_dimension_ranking(
+        wrapped, normalize_query_dims(query_dims), score_key=score_key,
+    )
+    if not applied:
+        return candidates, False, mode
+
+    out: list[dict] = []
+    for r in reranked:
+        orig = r["_orig"]
+        orig[score_key] = r[score_key]
+        orig["dim_boost"] = r.get("dim_boost", 0.0)
+        orig["dim_distance"] = r.get("dim_distance")
+        orig["dim_mode"] = mode
+        out.append(orig)
+    return out, applied, mode
 
 
 def _disambiguate(candidates: list[dict], query_dims: dict) -> list[dict]:
-    """
-    When multiple candidates have similar scores, use physical dimensions to
-    break ties. candidates is a list of {sku, brand_score, package_score,
-    combined_score, ...}. Returns re-ranked list.
-    """
-    if len(candidates) <= 1:
-        return candidates
-
-    # Only disambiguate if query carries any dimensional hint
-    has_dim = any(query_dims.get(d) for d in ["weight", "height", "length", "width"])
-    if not has_dim:
-        return candidates
-
-    for c in candidates:
-        dist = _dim_distance(c["sku"], query_dims)
-        # Closer to query dims → higher dim_boost
-        c["dim_boost"] = max(0.0, 1.0 - dist)
-        # Blend: 70% original combined_score, 30% dim similarity
-        c["combined_score"] = 0.70 * c["combined_score"] + 0.30 * c["dim_boost"]
-
-    return sorted(candidates, key=lambda x: x["combined_score"], reverse=True)
+    """Re-rank string-match candidates using physical dimensions when available."""
+    ranked, _, _ = _rank_string_match_candidates(candidates, query_dims)
+    return ranked
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,7 +271,8 @@ def match_sku(
     Returns a result dict with: status, confidence, reasoning, matched_skus.
     """
     db = _load_sku_db()
-    query_dims = query_dims or {}
+    from agents.dim_match import has_query_dims, normalize_query_dims
+    query_dims = normalize_query_dims(query_dims)
 
     candidates: list[dict] = []
 
@@ -263,15 +296,18 @@ def match_sku(
     candidates.sort(key=lambda x: x["combined_score"], reverse=True)
     top = candidates[:top_k]
 
-    # Detect ambiguity: top 2 are within 0.05 of each other
+    dim_applied = False
+    dim_mode = "none"
+    if has_query_dims(query_dims) and len(top) > 1:
+        top, dim_applied, dim_mode = _rank_string_match_candidates(top, query_dims)
+
     ambiguous = (
         len(top) >= 2
-        and abs(top[0]["combined_score"] - top[1]["combined_score"]) < 0.05
+        and abs(
+            float(top[0].get("combined_score_before_dim") or top[0]["combined_score"])
+            - float(top[1].get("combined_score_before_dim") or top[1]["combined_score"])
+        ) < 0.05
     )
-
-    if ambiguous:
-        top = _disambiguate(top, query_dims)
-        top.sort(key=lambda x: x["combined_score"], reverse=True)
 
     best = top[0]
     confidence = best["combined_score"]
@@ -293,6 +329,7 @@ def match_sku(
             "brand_score":          c["brand_score"],
             "package_score":        c["package_score"],
             "confidence":           round(c["combined_score"], 4),
+            "dim_boost":            c.get("dim_boost"),
         }
         for c in top
     ]
@@ -300,10 +337,14 @@ def match_sku(
     # ── Route to status ──────────────────────────────────────────────────────
     if confidence >= MERGE_THRESHOLD:
         status = "merged"
-        reasoning = _build_merged_reasoning(brand_name, package_type, best, ambiguous)
+        reasoning = _build_merged_reasoning(
+            brand_name, package_type, best, ambiguous, dim_applied, dim_mode,
+        )
     elif confidence >= UPDATE_THRESHOLD:
         status = "updated"
-        reasoning = _build_updated_reasoning(brand_name, package_type, best, ambiguous)
+        reasoning = _build_updated_reasoning(
+            brand_name, package_type, best, ambiguous, dim_applied, dim_mode,
+        )
     else:
         return _build_insert_result(
             brand_name, package_type,
@@ -317,30 +358,49 @@ def match_sku(
         "confidence":   round(confidence, 4),
         "reasoning":    reasoning,
         "ambiguous":    ambiguous,
+        "dim_applied":  dim_applied,
+        "dim_mode":     dim_mode,
         "matched_skus": matched_skus,
         "query": {
             "brand_name":   brand_name,
             "package_type": package_type,
+            "query_dims":   query_dims,
         },
     }
 
 
-def _build_merged_reasoning(brand: str, package: str, best: dict, ambiguous: bool) -> str:
+def _dim_reasoning_suffix(best: dict, dim_applied: bool, dim_mode: str) -> str:
+    boost = best.get("dim_boost") or 0
+    if not dim_applied or boost <= 0:
+        return ""
+    if dim_mode == "tie_break":
+        return (
+            f" Ambiguity resolved using physical dimensions "
+            f"(dim_boost={boost:.2f})."
+        )
+    return f" Physical dimensions supported the match (dim_boost={boost:.2f}, mode={dim_mode})."
+
+
+def _build_merged_reasoning(
+    brand: str, package: str, best: dict, ambiguous: bool,
+    dim_applied: bool = False, dim_mode: str = "none",
+) -> str:
     sku = best["sku"]
     parts = [
         f"High-confidence match to GlobalSKU {sku['sku_id']}.",
         f"Brand '{brand}' → '{sku['brand_name']}' (score={best['brand_score']:.2f}).",
         f"Package '{package}' → '{sku['package_category_name']}' (score={best['package_score']:.2f}).",
     ]
-    if ambiguous and best.get("dim_boost", 0) > 0:
-        parts.append(
-            f"Ambiguity resolved using physical dimensions "
-            f"(dim_boost={best['dim_boost']:.2f})."
-        )
+    suffix = _dim_reasoning_suffix(best, dim_applied, dim_mode)
+    if suffix:
+        parts.append(suffix.strip())
     return " ".join(parts)
 
 
-def _build_updated_reasoning(brand: str, package: str, best: dict, ambiguous: bool) -> str:
+def _build_updated_reasoning(
+    brand: str, package: str, best: dict, ambiguous: bool,
+    dim_applied: bool = False, dim_mode: str = "none",
+) -> str:
     sku = best["sku"]
     parts = [
         f"Partial match to GlobalSKU {sku['sku_id']} — below merge threshold.",
@@ -348,10 +408,9 @@ def _build_updated_reasoning(brand: str, package: str, best: dict, ambiguous: bo
         f"Package '{package}' → '{sku['package_category_name']}' (score={best['package_score']:.2f}).",
         "Existing GlobalSKU record would need review/update.",
     ]
-    if ambiguous and best.get("dim_boost", 0) > 0:
-        parts.append(
-            f"Disambiguation used physical dimensions (dim_boost={best['dim_boost']:.2f})."
-        )
+    suffix = _dim_reasoning_suffix(best, dim_applied, dim_mode)
+    if suffix:
+        parts.append(suffix.strip())
     return " ".join(parts)
 
 
@@ -407,19 +466,41 @@ class QueryRequest(BaseModel):
     """Handbook §5 — natural-language investigation question."""
     question:   str = Field(..., min_length=3, description="Plain-English SKU lifecycle question")
     anchor_sku: str | None = Field(None, description="Optional GlobalSKU sku_id to anchor root-cause trace")
+    scenario:   int | None = Field(
+        None,
+        ge=1,
+        le=6,
+        description="Force demo scenario 1–6 (skips keyword detection)",
+    )
+    weight: float | None = Field(None, description="Optional unit/case weight for catalog disambiguation")
+    height: float | None = Field(None, description="Optional case height (inches) for catalog disambiguation")
+    length: float | None = Field(None, description="Optional case length (inches) for catalog disambiguation")
+    width:  float | None = Field(None, description="Optional case width (inches) for catalog disambiguation")
 
 
 class QueryResponse(BaseModel):
     question:            str
     latency_seconds:     float
     summary:             str
+    task_type:           str | None = None
+    scenario:            int | None = None
     best_confidence:     float | None = None
     best_classification: str | None = None
     best_reasoning:      str | None = None
-    planner_rationale:   str = ""
+    doer_summary:        str | None = None
+    best_chain:          dict | None = None
     validated_chains:    list[dict] = []
+    candidate_summaries: list[dict] = []
+    planner_rationale:   str = ""
     spec:                dict = {}
     tasks:               list[dict] = []
+    catalog_query:       dict | None = None
+    match_result:        dict | None = None
+    duplicate_report:    dict | None = None
+    closed_world_rows:   list[dict] | None = None
+    reflexive_finding:   str | None = None
+    display_limits:      list[dict] = []
+    pipeline_events:     list[dict] = []
 
 
 class IngestJobResponse(BaseModel):
@@ -443,9 +524,9 @@ class MatchResponse(BaseModel):
 
 @app.on_event("startup")
 async def startup():
-    """Pre-load SKU database into memory on startup."""
+    """Pre-load master SKU catalog into memory on startup."""
     db = _load_sku_db()
-    print(f"[startup] Loaded {len(db):,} GlobalSKUs from {GLOBAL_SKU_CSV}")
+    print(f"[startup] Loaded {len(db):,} GlobalSKUs from {master_sku_source()}")
 
 
 @app.post("/match", response_model=MatchResponse)
@@ -483,16 +564,29 @@ def query_ask_endpoint(req: QueryRequest):
     """
     **API 1 — Natural-language agent query (handbook §5).**
 
-    Runs: Supervisor → Planner → Doer → Critic on the reflexive knowledge graph.
+    Routes by intent:
+    - **catalog_match** — master catalog lookup (brand + package → GlobalSKU)
+    - **lifecycle scenarios 1–6** — demo Cypher chains (optional `scenario` param)
+    - **root_cause / risk_rank / anomaly_explain** — full graph investigation
 
-    Example questions:
+    Examples:
+    - "Is the product available in the master list: AQUA WATER 28OZ PL 1/15"
     - "Why did model accuracy degrade after the recent customer import?"
-    - "Which SKUs have multiple weak risk signals before training?"
     - "Rank all GlobalSKUs by risk of causing training failures."
     """
     try:
         from api.query_service import run_nl_query
-        payload = run_nl_query(req.question, anchor_sku=req.anchor_sku)
+        payload = run_nl_query(
+            req.question,
+            anchor_sku=req.anchor_sku,
+            scenario=req.scenario,
+            query_dims={
+                "weight": req.weight,
+                "height": req.height,
+                "length": req.length,
+                "width": req.width,
+            },
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -502,13 +596,98 @@ def query_ask_endpoint(req: QueryRequest):
         question=payload["question"],
         latency_seconds=payload["latency_seconds"],
         summary=payload["summary"],
+        task_type=payload.get("task_type"),
+        scenario=payload.get("scenario"),
         best_confidence=payload.get("best_confidence"),
         best_classification=payload.get("best_classification"),
         best_reasoning=payload.get("best_reasoning"),
-        planner_rationale=payload.get("planner_rationale", ""),
+        doer_summary=payload.get("doer_summary"),
+        best_chain=payload.get("best_chain"),
         validated_chains=payload.get("validated_chains", []),
+        candidate_summaries=payload.get("candidate_summaries", []),
+        planner_rationale=payload.get("planner_rationale", ""),
         spec=payload.get("spec", {}),
         tasks=payload.get("tasks", []),
+        catalog_query=payload.get("catalog_query"),
+        match_result=payload.get("match_result"),
+        duplicate_report=payload.get("duplicate_report"),
+        closed_world_rows=payload.get("closed_world_rows"),
+        reflexive_finding=payload.get("reflexive_finding"),
+        display_limits=payload.get("display_limits", []),
+        pipeline_events=payload.get("pipeline_events", []),
+    )
+
+
+@app.post("/query/ask/stream")
+def query_ask_stream_endpoint(req: QueryRequest):
+    """
+    Stream live agent pipeline progress (SSE), then the final JSON result.
+
+    Events use phases: supervisor → planner → doer → critic → complete.
+    """
+    event_queue: queue.Queue = queue.Queue()
+    result_holder: dict[str, Any] = {}
+    error_holder: list[Exception] = []
+
+    def run_pipeline() -> None:
+        try:
+            from api.query_service import run_nl_query
+            result_holder["payload"] = run_nl_query(
+                req.question,
+                anchor_sku=req.anchor_sku,
+                scenario=req.scenario,
+                query_dims={
+                    "weight": req.weight,
+                    "height": req.height,
+                    "length": req.length,
+                    "width": req.width,
+                },
+                on_event=lambda ev: event_queue.put(ev.to_dict()),
+            )
+        except Exception as exc:
+            error_holder.append(exc)
+        finally:
+            event_queue.put(None)
+
+    threading.Thread(target=run_pipeline, daemon=True).start()
+
+    def generate():
+        while True:
+            item = event_queue.get()
+            if item is None:
+                if error_holder:
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "phase": "error",
+                            "status": "error",
+                            "title": "Something went wrong",
+                            "detail": str(error_holder[0]),
+                        })
+                        + "\n\n"
+                    )
+                else:
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "phase": "complete",
+                            "status": "done",
+                            "title": "Answer ready",
+                            "result": result_holder.get("payload", {}),
+                        })
+                        + "\n\n"
+                    )
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -635,6 +814,7 @@ def health():
     return {
         "status":               "ok",
         "sku_count":            len(db),
+        "master_sku_source":    master_sku_source(),
         "neo4j_available":      neo4j_available(),
         "embeddings_available": embeddings_available(),
         "postgres_configured":  postgres_configured(),
@@ -651,11 +831,12 @@ def root():
     return {
         "message": "Reflexive KG API",
         "data_sources": {
-            "master_global_skus": "data/vor_sku_data.csv",
+            "master_global_skus": master_sku_source(),
             "seed_tenant_list":   "data/SKU_Export.xlsx",
         },
         "endpoints": {
             "POST /query/ask":              "NL question → Supervisor → Planner → Doer → Critic",
+            "POST /query/ask/stream":       "Same pipeline with live SSE progress events",
             "POST /tenant/ingest":          "Upload tenant Excel → async merge/review/insert",
             "GET  /tenant/ingest/{job_id}": "Poll ingest job status + per-row reasoning",
             "GET  /tenant/ingest/{job_id}/download": "Download annotated output Excel",

@@ -8,15 +8,50 @@ Responsibilities:
   - Return a TaskList for the Doer
 
 Strategy by task_type:
-  root_cause     → backward Cypher trace + reflect_emb ANN at anchor
-  risk_rank      → anomaly_rank query (no traversal needed)
+  root_cause      → backward Cypher trace + reflect_emb ANN at anchor
+  risk_rank       → anomaly_rank query (no traversal needed)
   anomaly_explain → local Cypher neighbourhood + both self + reflect ANN
+  catalog_match   → master_match against GlobalSKU catalog (ANN + graph)
+  scenario_num    → lifecycle_cypher for hackathon demo scenarios 1–6
 """
 
 from __future__ import annotations
 
-from agents.llm import bedrock_model_label, get_llm
+from agents.lifecycle_doer import SCENARIO_QUESTIONS
+from agents.graph_search import (
+    extract_search_terms,
+    has_searchable_terms,
+)
+from agents.llm import LLMError, get_llm, LLMError
 from agents.models import QuerySpec, QueryTask, TaskList
+from agents.pipeline_trace import DOER_TASK_LABELS, trace
+
+_LIFECYCLE_PLAN: dict[int, tuple[str, str]] = {
+    1: (
+        "Brand duplication cascade",
+        "TenantSKU → GlobalSKU → non-canonical Brand → scan failures",
+    ),
+    2: (
+        "Multi-signal weak risk",
+        "GlobalSKUs with 0 training images AND 2+ scan failures (below per-signal thresholds)",
+    ),
+    3: (
+        "Proactive risk rank top-20",
+        "Rank cohort GlobalSKUs by effective anomaly score before training starts",
+    ),
+    4: (
+        "Import degradation A/B",
+        "Closed-world Cypher (b.flag='duplicate') vs reflexive brand-mismatch chain",
+    ),
+    5: (
+        "Shared SKU cross-customer risk",
+        "GlobalSKUs used by multiple customers — unsafe to change without blast-radius analysis",
+    ),
+    6: (
+        "Wrong auto-map vendor SKU",
+        "Fuzzy-mapped TenantSKU → GlobalSKU where neighbourhood contradicts tenant record",
+    ),
+}
 
 # ── Neo4j vector index names (must match 01_schema.py) ───────────────────────
 SELF_INDEXES = {
@@ -216,9 +251,20 @@ def _cypher_multi_signal_risk() -> str:
     """
 
 
-def _cypher_anomaly_rank(label: str, top_n: int = 20) -> str:
+def _cohort_from_question(question: str) -> str | None:
+    q = question.lower()
+    if "acme" in q:
+        return "ACME_ONBOARDING"
+    return None
+
+
+def _cypher_anomaly_rank(
+    label: str,
+    top_n: int = 20,
+    cohort: str | None = None,
+) -> str:
     """
-    Scenario 3: Rank entities by anomaly score (no rule required).
+    Rank entities by anomaly score (no rule required).
     Returns anchor + reflect embeddings for Python-side scoring.
     """
     pk = PK.get(label, "sku_id")
@@ -227,9 +273,11 @@ def _cypher_anomaly_rank(label: str, top_n: int = 20) -> str:
         "TenantSKU": "coalesce(n.brand, n.tenant_sku_id)",
         "Brand":     "n.brand_family",
     }.get(label, "n.name")
+    cohort_clause = "AND n.cohort = $cohort" if cohort and label == "GlobalSKU" else ""
     return f"""
     MATCH (n:{label})
     WHERE n.self_emb IS NOT NULL AND n.reflect_emb IS NOT NULL
+    {cohort_clause}
     RETURN
         n.{pk}       AS entity_id,
         '{label}'    AS label,
@@ -250,39 +298,137 @@ class PlannerAgent:
     Agent 2 — Query Decomposer.
 
     Converts a QuerySpec into an ordered TaskList (Cypher + ANN steps).
-    Bedrock (Claude Opus 4.7) produces a required rationale for the plan; execution
-    steps remain template-based for reproducible graph access.
+    Bedrock produces the analyst-facing plan rationale for every query type.
+    Execution steps remain template-based for reproducible graph access.
     """
+
+    def __init__(self, use_llm: bool = True):
+        self.use_llm = use_llm
+
+    def _llm_rationale(self, spec: QuerySpec, tasks: list[QueryTask]) -> str:
+        steps = "\n".join(f"  {t.step}. [{t.task_type}] {t.description}" for t in tasks)
+        prompt = (
+            f"Summarize this reflexive-KG query plan in 2-3 sentences for an analyst.\n"
+            f"Original question: {spec.question}\n"
+            f"task_type={spec.task_type} scenario={spec.scenario_num} "
+            f"depth={spec.traversal_depth} anchor={spec.anchor_entity_id}\n"
+            f"Planned steps:\n{steps}"
+        )
+        if not self.use_llm:
+            return prompt.split("\n", 1)[0]
+        try:
+            return get_llm().complete(
+                prompt,
+                system=(
+                    "You are the Planner agent for a SKU knowledge graph spanning "
+                    "PostgreSQL master_data and Neo4j reflexive embeddings. Be concise."
+                ),
+                max_tokens=220,
+            )
+        except LLMError as exc:
+            print(f"  [Planner] Bedrock rationale unavailable — {exc}")
+            if spec.scenario_num is not None:
+                title, detail = _LIFECYCLE_PLAN[spec.scenario_num]
+                return f"{title} — {detail}"
+            if spec.task_type == "catalog_match":
+                return (
+                    f"Match brand '{spec.brand_name}' and package '{spec.package_type}' "
+                    f"against master GlobalSKU catalog."
+                )
+            if spec.task_type == "catalog_duplicate":
+                return (
+                    "Scan PostgreSQL master_data and Neo4j GlobalSKU for duplicate UPC "
+                    "and duplicate brand+package groups."
+                )
+            return f"Execute {len(tasks)} retrieval steps for {spec.task_type}."
 
     def plan(self, spec: QuerySpec) -> TaskList:
         print(f"\n[Planner] Building task list for task_type='{spec.task_type}'")
         task_list = TaskList(spec=spec)
 
-        if spec.task_type == "root_cause":
+        if spec.scenario_num is not None:
+            self._plan_lifecycle_scenario(spec, task_list)
+        elif spec.task_type == "root_cause":
             self._plan_root_cause(spec, task_list)
         elif spec.task_type == "risk_rank":
             self._plan_risk_rank(spec, task_list)
         elif spec.task_type == "anomaly_explain":
             self._plan_anomaly_explain(spec, task_list)
+        elif spec.task_type == "catalog_match":
+            self._plan_catalog_match(spec, task_list)
+        elif spec.task_type == "catalog_duplicate":
+            self._plan_catalog_duplicate(spec, task_list)
 
         print(f"  [Planner] → {len(task_list.tasks)} tasks planned:")
         for t in task_list.tasks:
             print(f"    Step {t.step}: [{t.task_type}] {t.description}")
 
-        steps = "\n".join(f"  {t.step}. [{t.task_type}] {t.description}" for t in task_list.tasks)
-        task_list.llm_rationale = get_llm().complete(
-            f"Summarize this reflexive-KG query plan in 2 sentences for an analyst.\n"
-            f"task_type={spec.task_type} depth={spec.traversal_depth} anchor={spec.anchor_entity_id}\n"
-            f"Steps:\n{steps}",
-            system="You are the Planner agent for a SKU knowledge graph. Be concise.",
-            max_tokens=200,
+        task_list.llm_rationale = self._llm_rationale(spec, task_list.tasks)
+        tag = "LLM" if self.use_llm else "template"
+        print(f"  [Planner] Rationale ({tag}): {task_list.llm_rationale[:140]}...")
+        step_summaries = [
+            {
+                "step": t.step,
+                "task_type": t.task_type,
+                "title": DOER_TASK_LABELS.get(t.task_type, t.description),
+                "description": t.description,
+            }
+            for t in task_list.tasks
+        ]
+        trace(
+            "planner", "done",
+            "Investigation plan ready",
+            task_list.llm_rationale[:180] if task_list.llm_rationale else f"{len(task_list.tasks)} steps queued",
+            task_count=len(task_list.tasks),
+            steps=step_summaries,
         )
-        print(f"  [Planner] Rationale ({bedrock_model_label()}): {task_list.llm_rationale[:120]}...")
         return task_list
+
+    def _prepend_graph_search(self, spec: QuerySpec, tl: TaskList) -> None:
+        """Add exact → fuzzy → semantic graph search steps from the user question."""
+        terms = extract_search_terms(spec.question, spec)
+        if not has_searchable_terms(terms):
+            return
+
+        label = spec.entity_types[0] if spec.entity_types else "GlobalSKU"
+        terms_dict = terms.to_dict()
+        modes = (
+            ("graph_exact", "exact", "Exact graph match: SKU/UPC/brand/package"),
+            ("graph_fuzzy", "fuzzy", "Fuzzy graph match: brand/package similarity"),
+            ("graph_semantic", "semantic", "Semantic ANN: embed question → vector index"),
+        )
+        inserts = [
+            QueryTask(
+                step=0,
+                task_type=task_type,
+                label=label,
+                description=desc,
+                search_mode=mode,
+                search_query=spec.question,
+                search_terms=terms_dict,
+                top_k=20,
+            )
+            for task_type, mode, desc in modes
+        ]
+        tl.tasks = inserts + tl.tasks
+        for i, task in enumerate(tl.tasks, start=1):
+            task.step = i
+
+    def _plan_lifecycle_scenario(self, spec: QuerySpec, tl: TaskList):
+        num = spec.scenario_num
+        title, detail = _LIFECYCLE_PLAN[num]
+        tl.tasks.append(QueryTask(
+            step=1,
+            task_type="lifecycle_cypher",
+            label="GlobalSKU",
+            description=f"{title} — {detail}",
+            scenario_num=num,
+        ))
 
     # ── Root cause: backward trace + reflect ANN ──────────────────────────────
 
     def _plan_root_cause(self, spec: QuerySpec, tl: TaskList):
+        self._prepend_graph_search(spec, tl)
         anchor_label = spec.anchor_label or "GlobalSKU"
         anchor_id    = spec.anchor_entity_id
 
@@ -313,7 +459,11 @@ class PlannerAgent:
             ))
             step += 1
 
-        # General backward trace from anchor
+        # GlobalSKU anchor — evidence chain built in Doer (tenant → sku → brand → pallets)
+        elif anchor_id and anchor_label == "GlobalSKU":
+            pass
+
+        # General backward trace from anchor (non-SKU labels)
         elif anchor_id:
             tl.tasks.append(QueryTask(
                 step=step,
@@ -366,20 +516,29 @@ class PlannerAgent:
     # ── Risk rank: anomaly score only ─────────────────────────────────────────
 
     def _plan_risk_rank(self, spec: QuerySpec, tl: TaskList):
+        self._prepend_graph_search(spec, tl)
+        cohort = _cohort_from_question(spec.question)
         labels = spec.entity_types or ["GlobalSKU"]
         for i, label in enumerate(labels, start=1):
+            params: dict = {}
+            if cohort and label == "GlobalSKU":
+                params["cohort"] = cohort
+            desc = f"Rank {label} by anomaly score (1 - cosine similarity)"
+            if cohort:
+                desc += f" in cohort {cohort}"
             tl.tasks.append(QueryTask(
                 step=i,
                 task_type="anomaly_rank",
                 label=label,
-                description=f"Rank {label} by anomaly score (1 - cosine similarity)",
-                cypher=_cypher_anomaly_rank(label, top_n=50),
-                cypher_params={},
+                description=desc,
+                cypher=_cypher_anomaly_rank(label, top_n=50, cohort=cohort),
+                cypher_params=params,
             ))
 
     # ── Anomaly explain: neighbourhood + dual ANN ─────────────────────────────
 
     def _plan_anomaly_explain(self, spec: QuerySpec, tl: TaskList):
+        self._prepend_graph_search(spec, tl)
         anchor_label = spec.anchor_label or "GlobalSKU"
         anchor_id    = spec.anchor_entity_id
 
@@ -432,3 +591,35 @@ class PlannerAgent:
                 cypher=_cypher_anomaly_rank(anchor_label, top_n=20),
                 cypher_params={},
             ))
+
+    def _plan_catalog_match(self, spec: QuerySpec, tl: TaskList):
+        self._prepend_graph_search(spec, tl)
+        tl.tasks.append(QueryTask(
+            step=len(tl.tasks) + 1,
+            task_type="master_match",
+            label="GlobalSKU",
+            description=(
+                f"Master catalog match: {spec.brand_name} + {spec.package_type}"
+                + (
+                    f" (dims: {', '.join(f'{k}={v:g}' for k, v in spec.query_dims.items())})"
+                    if spec.query_dims else ""
+                )
+            ),
+            brand_name=spec.brand_name,
+            package_type=spec.package_type,
+            query_dims=dict(spec.query_dims),
+        ))
+        for i, task in enumerate(tl.tasks, start=1):
+            task.step = i
+
+    def _plan_catalog_duplicate(self, spec: QuerySpec, tl: TaskList):
+        tl.tasks.append(QueryTask(
+            step=1,
+            task_type="master_duplicate_check",
+            label="GlobalSKU",
+            description=(
+                "Master catalog duplicate scan: Postgres master_data + Neo4j "
+                "(duplicate UPC and brand+package groups)"
+            ),
+            search_query=spec.question,
+        ))

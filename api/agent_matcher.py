@@ -34,12 +34,22 @@ if str(ROOT) not in sys.path:
 
 from config import (
     NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-    GLOBAL_SKU_CSV,
     EMBEDDING_MODEL, EMBED_BATCH_SIZE,
     MATCH_AUTO_THRESHOLD, MATCH_REVIEW_THRESHOLD,
     MATCH_ANN_TOP_K,
 )
 from data.master_loader import load_master_sku_records
+from agents.dim_match import (
+    apply_dimension_ranking,
+    apply_dim_disambiguation,
+    format_dim_comparison,
+    format_dims,
+    has_query_dims,
+    normalize_query_dims,
+    dim_boost,
+    has_comparable_dims,
+)
+from agents.product_risk import format_product_risk_for_prompt, product_risk_for_sku
 
 # ── thresholds (same as string-matching endpoint) ─────────────────────────────
 MERGE_THRESHOLD  = 0.85
@@ -65,12 +75,12 @@ _brand_family_map: dict[str, str] | None = None
 
 
 def _get_brand_family_map() -> dict[str, str]:
-    """Maps brand_name → brand_family from vor_sku_data.csv."""
+    """Maps brand_name → brand_family from master catalog (Postgres or CSV)."""
     global _brand_family_map
     if _brand_family_map is not None:
         return _brand_family_map
     mapping: dict[str, str] = {}
-    for rec in load_master_sku_records(ROOT / GLOBAL_SKU_CSV):
+    for rec in load_master_sku_records():
         bn = (rec.get("brand_name") or "").strip().upper()
         bf = (rec.get("brand_family") or "").strip().upper()
         if bn and bf and bf not in ("", "UNKNOWN"):
@@ -548,26 +558,29 @@ def _composite_score(
     brand_name_query: str,
     pkg_quality: dict[str, float],
     brand_ids: set[str],
+    query_dims: dict | None = None,
 ) -> float:
     """
     Composite score (clamped to [0, 1]):
 
       45%  brand match   — continuous 0–1.0 (exact / brand-block / partial difflib)
       35%  package match — 1.0 / 0.90 (sorted-token) / 0.70 (fuzzy) tiers
-                           Point 3: sorted-token tier closes positional-mismatch gap
-      15%  ANN sim       — now non-zero for brand/package-block candidates (Point 1)
-       5%  reflect sim   — KG neighbourhood context
-      -10% anomaly       — capped at 0.50 so one old bad event can't tank a match (Point 5)
-      +5%  multi-signal  — bonus when brand + package + ANN all independently agree (Point 4)
+      15%  ANN sim
+       5%  reflect sim
+      -10% anomaly       — capped at 0.50
+      +5%  multi-signal  — bonus when brand + package + ANN all agree
+      +8%  dim match     — when query + candidate share weight/length/width/height
     """
     brand   = _brand_match_score(c, brand_name_query, brand_ids)
     pkg     = _pkg_match_score(c, pkg_quality)
     ann     = float(c.get("ann_sim", 0.0))
     reflect = float(c.get("reflect_sim", 0.0))
-    anomaly = min(float(c.get("anomaly_attn", 0.0)), 0.5)  # Point 5: cap penalty
+    anomaly = min(float(c.get("anomaly_attn", 0.0)), 0.5)
 
-    # Point 4: bonus when all three independent signal types corroborate
     multi_signal_bonus = 0.05 if (brand > 0 and pkg > 0 and ann > 0) else 0.0
+    dim_component = 0.0
+    if has_comparable_dims(query_dims, c):
+        dim_component = 0.08 * dim_boost(query_dims, c)
 
     score = (
         0.45 * brand
@@ -576,6 +589,7 @@ def _composite_score(
       + 0.05 * reflect
       - 0.10 * anomaly
       + multi_signal_bonus
+      + dim_component
     )
     return round(max(0.0, min(1.0, score)), 4)
 
@@ -638,6 +652,10 @@ def _heuristic_reasoning(
 def _llm_decision(
     brand_name: str, package_type: str, best: dict, score: float,
     score_status: str, all_candidates: list[dict],
+    query_dims: dict | None = None,
+    dim_applied: bool = False,
+    dim_mode: str = "none",
+    product_risk: dict | None = None,
 ) -> dict[str, str]:
     """
     Ask the LLM to analyze the match and return both a recommendation indicator
@@ -649,15 +667,43 @@ def _llm_decision(
     from agents.llm import get_llm, LLMError
 
     top3 = all_candidates[:3]
-    cand_text = "\n".join(
-        f"  - SKU {c.get('sku_id')}: brand={c.get('brand_name')}, "
-        f"package={c.get('package_category_name')}, "
-        f"composite_score={c.get('composite_score', 0):.4f}, "
-        f"ann_sim={c.get('ann_sim', 0):.3f}, "
-        f"reflect_sim={c.get('reflect_sim', 0):.3f}, "
-        f"anomaly_attn={c.get('anomaly_attn', 0):.3f}"
-        for c in top3
-    )
+    qd = normalize_query_dims(query_dims)
+    cand_lines = []
+    for c in top3:
+        line = (
+            f"  - SKU {c.get('sku_id')}: brand={c.get('brand_name')}, "
+            f"package={c.get('package_category_name')}, "
+            f"composite_score={c.get('composite_score', 0):.4f}, "
+            f"ann_sim={c.get('ann_sim', 0):.3f}, "
+            f"reflect_sim={c.get('reflect_sim', 0):.3f}, "
+            f"anomaly_attn={c.get('anomaly_attn', 0):.3f}"
+        )
+        if qd:
+            line += f", dims={format_dims(c)}"
+            if c.get("dim_boost") is not None:
+                line += f", dim_boost={c.get('dim_boost'):.3f}"
+        cand_lines.append(line)
+    cand_text = "\n".join(cand_lines)
+
+    dim_block = ""
+    if qd:
+        dim_block = (
+            f"\nQUERY PHYSICAL DIMENSIONS: {format_dims(qd)}\n"
+            f"Best candidate dimension check:\n"
+            f"{format_dim_comparison(qd, best)}\n"
+        )
+        if dim_applied:
+            dim_block += (
+                "Physical dimensions were used to nudge or break ties between candidates.\n"
+            )
+        else:
+            dim_block += (
+                "Note: use dimensions in your reasoning when candidates are close.\n"
+            )
+
+    product_block = ""
+    if product_risk:
+        product_block = f"\n{format_product_risk_for_prompt(product_risk)}\n"
 
     prompt = f"""You are a SKU data-quality agent for a beverage distribution company.
 
@@ -666,7 +712,7 @@ A new product entry needs to be matched against the Master Global SKU database.
 INPUT:
   brand_name   : {brand_name}
   package_type : {package_type}
-
+{dim_block}{product_block}
 TOP CANDIDATES FROM REFLEXIVE KNOWLEDGE GRAPH:
 {cand_text}
 
@@ -675,6 +721,8 @@ COMPOSITE SCORE: {score:.4f}  (score-based status: {score_status})
 Analyze:
 - How well the brand and package descriptor align with the top candidate
 - What the KG graph signals (ANN similarity, reflect neighbourhood, anomaly health) indicate
+- Product ecosystem risk (SKU + neighbors) when provided — cite drivers if product risk exceeds SKU-only anomaly
+- When query dimensions are provided, whether the top candidate's weight/length/width/height align
 - Whether the match is confident, needs human review, or has no valid match
 
 Based on your analysis, choose ONE indicator:
@@ -748,7 +796,7 @@ def agent_match(
       - score_breakdown showing contribution of each signal
       - kg_available flag so caller knows which path was taken
     """
-    query_dims = query_dims or {}
+    query_dims = normalize_query_dims(query_dims)
 
     # ── Step 1: Embed ─────────────────────────────────────────────────────────
     query_emb = _embed_query(brand_name, package_type)
@@ -797,7 +845,7 @@ def agent_match(
         sid = c.get("sku_id") or ""
         if not sid:
             continue
-        score = _composite_score(c, brand_name, pkg_quality, brand_ids)
+        score = _composite_score(c, brand_name, pkg_quality, brand_ids, query_dims)
         c["composite_score"] = score
         # Annotate signals for traceability
         cand_brand = (c.get("brand_name") or "").upper()
@@ -818,8 +866,21 @@ def agent_match(
     if not ranked:
         return _insert_result(brand_name, package_type, "Scoring produced no valid candidates", True)
 
+    dim_applied = False
+    dim_mode = "none"
+    if has_query_dims(query_dims) and len(ranked) > 1:
+        ranked, dim_applied, dim_mode = apply_dimension_ranking(
+            ranked, query_dims, score_key="composite_score", tie_threshold=0.05,
+        )
+
     best  = ranked[0]
     score = best["composite_score"]
+    best_sku_id = str(best.get("sku_id") or "")
+
+    product_risk = product_risk_for_sku(driver, best_sku_id)
+    if product_risk:
+        product_risk["brand_name"] = brand_name
+        product_risk["package_type"] = package_type
 
     # ── Step 5: Critic — LLM indicator + reasoning + combined status ─────────
     score_status = (
@@ -827,7 +888,11 @@ def agent_match(
         "updated" if score >= UPDATE_THRESHOLD else
         "insert"
     )
-    llm_result    = _llm_decision(brand_name, package_type, best, score, score_status, ranked)
+    llm_result    = _llm_decision(
+        brand_name, package_type, best, score, score_status, ranked,
+        query_dims=query_dims, dim_applied=dim_applied, dim_mode=dim_mode,
+        product_risk=product_risk,
+    )
     llm_indicator = llm_result["indicator"]
     reasoning     = llm_result["reasoning"]
     status        = _combine_status(score, llm_indicator)
@@ -852,11 +917,22 @@ def agent_match(
                 "ann_sim":      round(float(c.get("ann_sim", 0)), 4),
                 "reflect_sim":  round(float(c.get("reflect_sim", 0)), 4),
                 "anomaly_attn": round(float(c.get("anomaly_attn", 0)), 4),
+                "dim_boost":    round(float(c.get("dim_boost", 0)), 4),
             },
+            "dim_boost":    c.get("dim_boost"),
+            "dim_distance": c.get("dim_distance"),
             "signals": c.get("signals", []),
         }
         for c in ranked[:5]
     ]
+
+    ambiguous = (
+        len(ranked) >= 2
+        and abs(
+            float(ranked[0].get("composite_score_before_dim") or ranked[0]["composite_score"])
+            - float(ranked[1].get("composite_score_before_dim") or ranked[1]["composite_score"])
+        ) < 0.05
+    )
 
     return {
         "status":        status,
@@ -864,14 +940,15 @@ def agent_match(
         "llm_indicator": llm_indicator,   # LLM's own recommendation
         "confidence":    score,
         "reasoning":     reasoning,
-        "ambiguous":     (
-            len(ranked) >= 2
-            and abs(ranked[0]["composite_score"] - ranked[1]["composite_score"]) < 0.05
-        ),
+        "ambiguous":     ambiguous,
+        "dim_applied":   dim_applied,
+        "dim_mode":      dim_mode,
+        "product_risk":  product_risk,
         "matched_skus": matched_skus,
         "query": {
             "brand_name":   brand_name,
             "package_type": package_type,
+            "query_dims":   query_dims,
         },
         "kg_available": True,
         "pipeline": {

@@ -1,8 +1,8 @@
 """
 llm.py — Amazon Bedrock LLM (Claude Opus 4.7).
 
-All agent intelligence calls go through this module. There is no Anthropic API-key
-path and no heuristic fallback when a call is made — failures raise LLMError.
+All agent intelligence calls go through this module. Agents call Bedrock first when
+AGENT_USE_LLM is enabled; individual agents fall back to rule-based logic on LLMError.
 
 Requires AWS credentials with Bedrock access to anthropic.claude-opus-4-7 in
 BEDROCK_REGION (default us-east-1). Override model via BEDROCK_MODEL_ID.

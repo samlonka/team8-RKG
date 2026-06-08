@@ -29,6 +29,9 @@ from agents.models import (
     CriticResult, EntityNode,
 )
 from agents.llm import LLMError, get_llm
+from agents.dim_match import format_dim_comparison, format_dims, normalize_query_dims
+from agents.product_risk import format_product_risk_for_prompt
+from agents.pipeline_trace import trace
 from config import (
     CRITIC_CONFIDENCE_THRESHOLD,
     MIN_ENTITIES_PER_HOP,
@@ -142,14 +145,113 @@ def _confidence(
     )
 
 
-def _build_reasoning(
+def _catalog_master_nodes(chain: CandidateChain) -> list[EntityNode]:
+    """Master-match SKUs in a catalog chain (graph search hits are supporting context)."""
+    return [n for n in chain.path if n.source == "master_match"]
+
+
+def _catalog_top_node(chain: CandidateChain) -> EntityNode | None:
+    """Top ranked master-match node, not the first graph-search hit."""
+    master = _catalog_master_nodes(chain)
+    if master:
+        return master[0]
+    return chain.path[0] if chain.path else None
+
+
+def _build_catalog_reasoning(chain: CandidateChain, confidence: float) -> str:
+    if not chain.path:
+        return (
+            "No matching GlobalSKU found in the master catalog for the given "
+            "brand and package. Recommend CREATE_NEW or manual review."
+        )
+    top = _catalog_top_node(chain)
+    if top is None:
+        return (
+            "No matching GlobalSKU found in the master catalog for the given "
+            "brand and package. Recommend CREATE_NEW or manual review."
+        )
+    props = top.properties
+    status = props.get("match_status", "unknown")
+    sku = top.entity_id
+    brand = props.get("brand_name") or props.get("query_brand")
+    pkg = props.get("package_category_name") or props.get("query_package")
+    breakdown = props.get("score_breakdown") or {}
+    query_dims = normalize_query_dims(props.get("query_dims"))
+    parts = [
+        f"Master catalog lookup: query brand '{props.get('query_brand')}' + "
+        f"package '{props.get('query_package')}'.",
+        f"Best match GlobalSKU {sku} ({brand} / {pkg}) — status={status}.",
+    ]
+    if query_dims:
+        parts.append(f"Query dimensions: {format_dims(query_dims)}.")
+        parts.append(format_dim_comparison(query_dims, props))
+        if props.get("dim_applied"):
+            mode = props.get("dim_mode", "nudge")
+            parts.append(f"Dimension ranking applied ({mode}).")
+    if breakdown:
+        dim_note = ""
+        if breakdown.get("dim_boost"):
+            dim_note = f", dim={breakdown.get('dim_boost', 0):.2f}"
+        parts.append(
+            f"Signals — brand={breakdown.get('brand_match', 0):.2f}, "
+            f"pkg={breakdown.get('pkg_match', 0):.2f}, "
+            f"ANN={breakdown.get('ann_sim', 0):.2f}, "
+            f"anomaly_attn={breakdown.get('anomaly_attn', 0):.2f}{dim_note}."
+        )
+    product_risk = props.get("product_risk")
+    if product_risk and product_risk.get("anomaly_max") is not None:
+        parts.append(
+            f"Product ecosystem: {product_risk.get('classification')} risk "
+            f"(max={product_risk.get('anomaly_max'):.2f}, "
+            f"mean={product_risk.get('anomaly_mean'):.2f}). "
+            f"{product_risk.get('summary', '')}"
+        )
+        drivers = product_risk.get("drivers") or []
+        if drivers:
+            top = drivers[0]
+            parts.append(
+                f"Top driver: {top.get('label')} {top.get('entity_id')} "
+                f"(anomaly={top.get('anomaly'):.2f}, {top.get('context', '')})."
+            )
+    alt = _catalog_master_nodes(chain)[1:3]
+    if alt:
+        parts.append(
+            "Alternates: "
+            + ", ".join(f"{n.entity_id} ({n.display_name})" for n in alt)
+        )
+    parts.append(f"Match confidence: {confidence:.3f}.")
+    return " ".join(parts)
+
+
+def _validate_catalog_chain(chain: CandidateChain) -> tuple[float, str] | None:
+    """Return (confidence, reasoning) for a master_match chain, or None to reject."""
+    if not chain.path:
+        return 0.0, _build_catalog_reasoning(chain, 0.0)
+
+    top = _catalog_top_node(chain)
+    if top is None:
+        return None
+
+    conf = float(top.properties.get("match_confidence") or 0.0)
+    status = top.properties.get("match_status", "insert")
+
+    if status == "merged" and conf >= 0.85:
+        return conf, _build_catalog_reasoning(chain, conf)
+    if status in ("merged", "updated") and conf >= 0.60:
+        return conf, _build_catalog_reasoning(chain, conf)
+    if conf >= 0.30:
+        return conf, _build_catalog_reasoning(chain, conf)
+    return None
+
+
+def _build_graph_reasoning(
     chain: CandidateChain,
     temporal: float,
     density: float,
     anomaly: float,
     confidence: float,
 ) -> str:
-    """Generate a human-readable explanation of the chain."""
+    """Generate a human-readable explanation of a graph investigation chain."""
     path = chain.path
     labels  = list({n.label for n in path})
     high    = [n for n in path if (n.anomaly_score or 0) >= ANOMALY_HIGH_RISK]
@@ -189,8 +291,101 @@ def _build_reasoning(
     return " ".join(parts)
 
 
+def _llm_verdict(
+    chain: CandidateChain,
+    question: str,
+    task_type: str,
+    rule_conf: float,
+    temporal: float,
+    density: float,
+    anomaly: float,
+    base_reasoning: str,
+) -> dict | None:
+    """
+    Critic LLM: final accept/reject decision + analyst-facing reasoning.
+    Returns dict with accept, confidence, reasoning, classification — or None on failure.
+    """
+    path = " → ".join(f"{n.label}:{n.display_name}" for n in chain.path[:12])
+    if len(chain.path) > 12:
+        path += f" (+{len(chain.path) - 12} more)"
+    doer_note = f"\nDoer interpretation: {chain.llm_summary}" if chain.llm_summary else ""
+    prompt = (
+        f"User question: {question}\n"
+        f"Task type: {task_type} | Chain source: {chain.source}\n"
+        f"Rule-based scores — confidence: {rule_conf:.3f}, temporal: {temporal:.2f}, "
+        f"density: {density:.2f}, anomaly: {anomaly:.2f}\n"
+        f"Evidence path ({len(chain.path)} nodes): {path or '(empty)'}"
+        f"{doer_note}\n\n"
+        f"Rule-based summary: {base_reasoning}\n\n"
+        "Return ONLY JSON:\n"
+        '{"accept": true|false, "confidence": 0.0-1.0, "reasoning": "2-3 sentences", '
+        '"classification": "Confirmed Anomaly|Needs Review|Healthy|Master Match|Not in Master"}'
+    )
+    try:
+        return get_llm().json(
+            prompt,
+            system=(
+                "You are the Critic agent for a reflexive SKU knowledge graph. "
+                "Accept chains that credibly answer the question with sufficient evidence. "
+                "For catalog matches, accept when a plausible GlobalSKU match exists."
+            ),
+            max_tokens=320,
+        )
+    except LLMError:
+        return None
+
+
+def _llm_catalog_verdict(
+    chain: CandidateChain,
+    question: str,
+    rule_conf: float,
+    base_reasoning: str,
+) -> dict | None:
+    top = _catalog_top_node(chain)
+    props = top.properties if top else {}
+    query_dims = normalize_query_dims(props.get("query_dims"))
+    dim_block = ""
+    if query_dims and top:
+        dim_block = (
+            f"\nQuery dimensions: {format_dims(query_dims)}\n"
+            f"{format_dim_comparison(query_dims, props)}\n"
+            f"Dimension tie-break applied: {bool(props.get('dim_applied'))} "
+            f"(mode={props.get('dim_mode', 'none')})\n"
+        )
+    product_risk = props.get("product_risk")
+    product_block = ""
+    if product_risk:
+        product_block = f"\n{format_product_risk_for_prompt(product_risk)}\n"
+    prompt = (
+        f"User question: {question}\n"
+        f"Match confidence: {rule_conf:.3f} | status: {props.get('match_status', 'none')}\n"
+        f"Best SKU: {top.entity_id if top else 'none'}\n"
+        f"{dim_block}{product_block}"
+        f"Rule summary: {base_reasoning}\n\n"
+        "When physical dimensions were provided, explain whether the best SKU's "
+        "weight/length/width/height support the match (especially after a tie-break).\n"
+        "When product ecosystem risk is provided, explain whether neighbors (pallets, "
+        "merges, tenant SKUs) make this product risky even if the GlobalSKU looks healthy.\n\n"
+        "Return ONLY JSON:\n"
+        '{"accept": true|false, "confidence": 0.0-1.0, "reasoning": "2-3 sentences", '
+        '"classification": "Master Match|Needs Review|Not in Master"}'
+    )
+    try:
+        return get_llm().json(
+            prompt,
+            system=(
+                "You are the Critic agent validating master catalog SKU lookups. "
+                "Use case dimensions (weight, length, width, height) when available "
+                "to confirm or challenge close matches."
+            ),
+            max_tokens=320,
+        )
+    except LLMError:
+        return None
+
+
 def _llm_reasoning(chain: CandidateChain, base: str, confidence: float) -> str:
-    """Bedrock narrative for validated chains; falls back to rule-based summary if unavailable."""
+    """Legacy narrative polish — used only when LLM verdict did not supply reasoning."""
     path_summary = " → ".join(
         f"{n.label}:{n.display_name}" for n in chain.path[:8]
     )
@@ -218,12 +413,9 @@ class CriticAgent:
     """
     Agent 4 — Evidence Validator.
 
-    Scores every candidate chain on temporal validity, evidence density,
-    and anomaly signal. Rejects below threshold. Returns top-N.
-
-    The Critic is also what produces the "Needs Review" classification:
-    chains that scored close to the threshold get a different label
-    than chains that scored well above it.
+    When use_llm=True, Bedrock makes the final accept/reject decision using
+    rule-based scores as structured input. Rule-only fallback when Bedrock
+    is unavailable (demo / offline mode).
     """
 
     def __init__(
@@ -231,12 +423,19 @@ class CriticAgent:
         threshold: float = CRITIC_CONFIDENCE_THRESHOLD,
         top_n: int = CRITIC_TOP_N,
         min_per_hop: int = MIN_ENTITIES_PER_HOP,
+        use_llm: bool = True,
     ):
         self.threshold  = threshold
         self.top_n      = top_n
         self.min_per_hop = min_per_hop
+        self.use_llm    = use_llm
 
-    def validate(self, candidates: list[CandidateChain]) -> CriticResult:
+    def validate(
+        self,
+        candidates: list[CandidateChain],
+        question: str = "",
+        task_type: str = "root_cause",
+    ) -> CriticResult:
         print(f"\n[Critic] Validating {len(candidates)} candidate chains "
               f"(threshold={self.threshold}) ...")
 
@@ -244,6 +443,94 @@ class CriticAgent:
         rejected:  list[RejectedChain]  = []
 
         for chain in candidates:
+            if chain.source == "master_duplicate":
+                if not chain.path:
+                    rejected.append(RejectedChain(
+                        chain_id=chain.chain_id,
+                        reason="Empty duplicate scan result",
+                        confidence=0.0,
+                    ))
+                    continue
+                scores = [n.anomaly_score or 0.0 for n in chain.path]
+                conf = max(scores) if scores else 0.7
+                if not chain.path[0].entity_id.startswith("NO_DUPLICATES"):
+                    conf = max(conf, 0.72)
+                else:
+                    conf = 0.88
+                reasoning = chain.llm_summary or (
+                    "Master catalog duplicate scan completed. "
+                    + (
+                        f"Found {len(chain.path)} duplicate group(s)."
+                        if chain.path[0].entity_id != "NO_DUPLICATES"
+                        else "No duplicate UPC or brand+package groups detected."
+                    )
+                )
+                if self.use_llm and question:
+                    verdict = _llm_verdict(
+                        chain, question, task_type, conf, 1.0, 1.0,
+                        conf, reasoning,
+                    )
+                    if verdict is not None:
+                        conf = float(verdict.get("confidence", conf))
+                        reasoning = verdict.get("reasoning") or reasoning
+                        if not verdict.get("accept", True):
+                            rejected.append(RejectedChain(
+                                chain_id=chain.chain_id,
+                                reason=f"LLM rejected: {reasoning[:120]}",
+                                confidence=conf,
+                            ))
+                            continue
+                validated.append(ValidatedChain(
+                    chain_id=chain.chain_id,
+                    path=chain.path,
+                    confidence=conf,
+                    temporal_validity=1.0,
+                    evidence_density=min(1.0, len(chain.path) / 3.0),
+                    avg_anomaly_score=sum(scores) / len(scores) if scores else 0.0,
+                    reasoning=reasoning,
+                    source=chain.source,
+                ))
+                continue
+
+            if chain.source == "master_match":
+                catalog = _validate_catalog_chain(chain)
+                if catalog is None:
+                    rejected.append(RejectedChain(
+                        chain_id=chain.chain_id,
+                        reason="Match confidence below minimum threshold",
+                        confidence=0.0,
+                    ))
+                    continue
+                conf, base_reasoning = catalog
+                reasoning = base_reasoning
+                final_conf = conf
+
+                if self.use_llm and question:
+                    verdict = _llm_catalog_verdict(chain, question, conf, base_reasoning)
+                    if verdict is not None:
+                        final_conf = float(verdict.get("confidence", conf))
+                        reasoning = verdict.get("reasoning") or base_reasoning
+                        if not verdict.get("accept", True):
+                            rejected.append(RejectedChain(
+                                chain_id=chain.chain_id,
+                                reason=f"LLM rejected: {reasoning[:120]}",
+                                confidence=final_conf,
+                            ))
+                            continue
+                        print(f"  [Critic] LLM verdict chain={chain.chain_id} accept confidence={final_conf:.3f}")
+
+                validated.append(ValidatedChain(
+                    chain_id=chain.chain_id,
+                    path=chain.path,
+                    confidence=final_conf,
+                    temporal_validity=1.0,
+                    evidence_density=1.0 if chain.path else 0.0,
+                    avg_anomaly_score=_anomaly_signal(chain.path),
+                    reasoning=reasoning,
+                    source=chain.source,
+                ))
+                continue
+
             if not chain.path:
                 rejected.append(RejectedChain(
                     chain_id=chain.chain_id,
@@ -255,26 +542,47 @@ class CriticAgent:
             temporal = _temporal_validity(chain.path)
             density  = _evidence_density(chain.path, self.min_per_hop)
             anomaly  = _anomaly_signal(chain.path)
-            conf     = _confidence(temporal, density, anomaly)
+            rule_conf = _confidence(temporal, density, anomaly)
+            base_reasoning = _build_graph_reasoning(chain, temporal, density, anomaly, rule_conf)
 
-            if conf < self.threshold:
+            final_conf = rule_conf
+            reasoning = base_reasoning
+            accepted = rule_conf >= self.threshold
+
+            if self.use_llm and question:
+                verdict = _llm_verdict(
+                    chain, question, task_type, rule_conf,
+                    temporal, density, anomaly, base_reasoning,
+                )
+                if verdict is not None:
+                    final_conf = float(verdict.get("confidence", rule_conf))
+                    reasoning = verdict.get("reasoning") or base_reasoning
+                    accepted = bool(verdict.get("accept", accepted))
+                    print(
+                        f"  [Critic] LLM verdict chain={chain.chain_id} "
+                        f"accept={accepted} confidence={final_conf:.3f} "
+                        f"(rule={rule_conf:.3f})"
+                    )
+                elif self.use_llm:
+                    reasoning = _llm_reasoning(chain, base_reasoning, rule_conf)
+            elif accepted:
+                reasoning = _llm_reasoning(chain, base_reasoning, rule_conf)
+
+            if not accepted or final_conf < self.threshold:
                 rejected.append(RejectedChain(
                     chain_id=chain.chain_id,
                     reason=(
-                        f"Confidence {conf:.3f} below threshold {self.threshold} "
+                        f"Confidence {final_conf:.3f} below threshold {self.threshold} "
                         f"(temporal={temporal:.2f}, density={density:.2f}, anomaly={anomaly:.2f})"
                     ),
-                    confidence=conf,
+                    confidence=final_conf,
                 ))
                 continue
-
-            reasoning = _build_reasoning(chain, temporal, density, anomaly, conf)
-            reasoning = _llm_reasoning(chain, reasoning, conf)
 
             validated.append(ValidatedChain(
                 chain_id=chain.chain_id,
                 path=chain.path,
-                confidence=conf,
+                confidence=final_conf,
                 temporal_validity=temporal,
                 evidence_density=density,
                 avg_anomaly_score=anomaly,
@@ -305,6 +613,22 @@ class CriticAgent:
             for r in rejected[:5]:  # show first 5
                 print(f"    chain={r.chain_id} ({r.reason[:80]})")
 
+        best_conf = top_validated[0].confidence if top_validated else 0.0
+        if accepted:
+            verdict = "Evidence accepted"
+            detail = f"{accepted}/{total} chain(s) passed · best confidence {best_conf:.0%}"
+        else:
+            verdict = "No chain met the bar"
+            detail = f"0/{total} chain(s) passed the quality threshold"
+        trace(
+            "critic", "done",
+            verdict,
+            detail,
+            accepted=accepted,
+            total=total,
+            best_confidence=round(best_conf, 4),
+        )
+
         return CriticResult(
             validated=top_validated,
             rejected=rejected,
@@ -313,11 +637,26 @@ class CriticAgent:
 
     def classify(self, chain: ValidatedChain) -> str:
         """
-        Classify a validated chain for display:
-        - 'Confirmed Anomaly'  : high confidence + high anomaly score
-        - 'Needs Review'       : passed threshold but low anomaly signal
-        - 'Healthy'            : low anomaly, probably not a problem
+        Classify a validated chain for display.
         """
+        if chain.source == "master_duplicate":
+            if chain.path and chain.path[0].entity_id == "NO_DUPLICATES":
+                return "Clean Master Catalog"
+            return "Master Duplicates Found"
+
+        if chain.source == "master_match":
+            if not chain.path:
+                return "Not in Master"
+            top = _catalog_top_node(chain)
+            if top is None:
+                return "Not in Master"
+            status = top.properties.get("match_status", "insert")
+            if status == "merged" and chain.confidence >= 0.85:
+                return "Master Match"
+            if status in ("merged", "updated"):
+                return "Needs Review"
+            return "Not in Master"
+
         if chain.confidence >= 0.80 and chain.avg_anomaly_score >= ANOMALY_HIGH_RISK:
             return "Confirmed Anomaly"
         elif chain.confidence >= self.threshold:

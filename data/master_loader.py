@@ -183,20 +183,8 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
-def load_master_sku_records(path: str | Path | None = None) -> list[dict]:
-    """
-    Load master CSV by column name for API matching (brand + package scores).
-    """
-    path = Path(path or GLOBAL_SKU_CSV)
-    if not path.is_absolute():
-        root = Path(__file__).resolve().parent.parent
-        path = root / path
-
-    df = pd.read_csv(path, dtype=str, low_memory=False)
-    df.columns = [c.strip('"').strip() for c in df.columns]
-    df = df.drop_duplicates(subset=["sku_id"], keep="first")
-    df = enrich_global_dataframe(df)
-
+def _records_from_dataframe(df: pd.DataFrame) -> list[dict]:
+    """Convert an enriched master dataframe to API matcher records."""
     records: list[dict] = []
     for _, row in df.iterrows():
         h = _safe_float(row.get("height"))
@@ -214,4 +202,58 @@ def load_master_sku_records(path: str | Path | None = None) -> list[dict]:
             "brand_family":          str(row.get("brand_family", "")).strip(),
             "package_name":          str(row.get("package_name", "")).strip(),
         })
+    return records
+
+
+def _load_master_sku_records_from_csv(path: str | Path | None = None) -> list[dict]:
+    """Load master catalog from local CSV (bootstrap / offline fallback)."""
+    path = Path(path or GLOBAL_SKU_CSV)
+    if not path.is_absolute():
+        root = Path(__file__).resolve().parent.parent
+        path = root / path
+
+    df = pd.read_csv(path, dtype=str, low_memory=False)
+    df.columns = [c.strip('"').strip() for c in df.columns]
+    df = df.drop_duplicates(subset=["sku_id"], keep="first")
+    df = enrich_global_dataframe(df)
+    return _records_from_dataframe(df)
+
+
+def resolve_master_sku_records(from_csv: bool = False) -> tuple[list[dict], str]:
+    """
+    Load master SKU records for API matching.
+
+    Prefers PostgreSQL ``master_data`` when configured and reachable;
+    falls back to ``GLOBAL_SKU_CSV`` (same policy as ``02_seed_data.py``).
+    """
+    if not from_csv:
+        try:
+            from data.postgres_store import check_connection, load_master_dataframe, postgres_configured
+
+            if postgres_configured():
+                ok, msg = check_connection()
+                if ok:
+                    df = load_master_dataframe()
+                    if not df.empty:
+                        return _records_from_dataframe(df), f"PostgreSQL master_data ({msg})"
+                    print("  WARN: PostgreSQL master_data is empty — falling back to CSV")
+                else:
+                    print(f"  WARN: PostgreSQL configured but unavailable ({msg}) — falling back to CSV")
+        except Exception as exc:
+            print(f"  WARN: PostgreSQL master load failed ({exc}) — falling back to CSV")
+
+    records = _load_master_sku_records_from_csv()
+    return records, GLOBAL_SKU_CSV
+
+
+def load_master_sku_records(path: str | Path | None = None) -> list[dict]:
+    """
+    Load master catalog for API matching (brand + package scores).
+
+    When ``path`` is omitted, prefers PostgreSQL then CSV.
+    When ``path`` is set, always reads that CSV file.
+    """
+    if path is not None:
+        return _load_master_sku_records_from_csv(path)
+    records, _ = resolve_master_sku_records()
     return records

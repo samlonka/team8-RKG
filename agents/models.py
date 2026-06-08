@@ -18,7 +18,7 @@ from typing import Optional
 # SUPERVISOR OUTPUT
 # ─────────────────────────────────────────────────────────────────────────────
 
-TASK_TYPES = ("root_cause", "risk_rank", "anomaly_explain")
+TASK_TYPES = ("root_cause", "risk_rank", "anomaly_explain", "catalog_match", "catalog_duplicate")
 
 @dataclass
 class QuerySpec:
@@ -27,16 +27,25 @@ class QuerySpec:
     Produced by the Supervisor agent.
     """
     question:          str                    # original NL question
-    task_type:         str                    # "root_cause" | "risk_rank" | "anomaly_explain"
+    task_type:         str                    # root_cause | risk_rank | anomaly_explain | catalog_match
     entity_types:      list[str]              # e.g. ["GlobalSKU", "Brand"]
     anchor_label:      Optional[str]  = None  # "GlobalSKU" | "Brand" | ...
     anchor_entity_id:  Optional[str]  = None  # specific ID extracted from question
     time_window:       Optional[dict] = None  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     traversal_depth:   int            = 3     # how many hops the Planner should build
+    brand_name:        Optional[str]  = None  # catalog_match — query brand
+    package_type:      Optional[str]  = None  # catalog_match — query package descriptor
+    query_dims:        dict           = field(default_factory=dict)  # weight/height/length/width hints
+    scenario_num:      Optional[int]  = None  # hackathon demo scenario 1–6 when matched
 
     def __post_init__(self):
         if self.task_type not in TASK_TYPES:
             raise ValueError(f"task_type must be one of {TASK_TYPES}, got '{self.task_type}'")
+        if self.scenario_num is not None and self.scenario_num not in range(1, 7):
+            raise ValueError(f"scenario_num must be 1–6, got {self.scenario_num}")
+        if self.task_type == "catalog_match":
+            if not (self.brand_name and self.package_type):
+                raise ValueError("catalog_match requires brand_name and package_type")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,6 +57,12 @@ QUERY_TASK_TYPES = (
     "ann_self",         # ANN search on self_emb (semantic similarity)
     "ann_reflect",      # ANN search on reflect_emb (neighbourhood context)
     "anomaly_rank",     # Rank all entities by anomaly score
+    "master_match",     # Match brand+package against master GlobalSKU catalog
+    "lifecycle_cypher", # Hackathon demo scenario traversal (agents/lifecycle_doer.py)
+    "graph_exact",      # Exact match on SKU/UPC/brand/package from user question
+    "graph_fuzzy",      # Fuzzy brand/package graph match
+    "graph_semantic",   # ANN semantic search from embedded question text
+    "master_duplicate_check",  # Scan Postgres/Neo4j for duplicate master SKUs
 )
 
 @dataclass
@@ -73,6 +88,19 @@ class QueryTask:
     # Which embedding to fetch from anchor
     use_self_emb:    bool = False
     use_reflect_emb: bool = False
+
+    # master_match task fields
+    brand_name:   Optional[str] = None
+    package_type: Optional[str] = None
+    query_dims:   dict          = field(default_factory=dict)
+
+    # lifecycle_cypher task fields
+    scenario_num: Optional[int] = None
+
+    # graph search task fields (exact / fuzzy / semantic)
+    search_mode:   Optional[str] = None   # exact | fuzzy | semantic
+    search_query:  Optional[str] = None   # original NL question
+    search_terms:  dict           = field(default_factory=dict)
 
 
 @dataclass
@@ -111,10 +139,11 @@ class CandidateChain:
     A raw causal chain assembled by the Doer from graph + ANN results.
     Not yet validated — the Critic will score and accept/reject it.
     """
-    chain_id:  str
-    path:      list[EntityNode]     # ordered entity path (root → leaf)
-    source:    str                  # "cypher" | "ann_self" | "ann_reflect" | "union"
-    hop_count: int = 0
+    chain_id:    str
+    path:        list[EntityNode]     # ordered entity path (root → leaf)
+    source:      str                  # "cypher" | "ann_self" | "ann_reflect" | "union"
+    hop_count:   int = 0
+    llm_summary: str = ""             # Doer LLM interpretation of this chain
 
     def __post_init__(self):
         self.hop_count = len(self.path)
@@ -183,6 +212,22 @@ class PipelineResult:
                 f"No validated chains found for: '{self.question}'\n"
                 f"Candidates: {len(self.candidates)} | Accepted: 0 | "
                 f"Acceptance rate: {self.critic_result.acceptance_rate:.0%}"
+            )
+        if self.spec.task_type == "catalog_match":
+            top = best.path[0] if best.path else None
+            sku = top.entity_id if top else "—"
+            status = (top.properties.get("match_status") if top else None) or "—"
+            return (
+                f"Catalog lookup: '{self.question}'\n"
+                f"Brand: {self.spec.brand_name} | Package: {self.spec.package_type}\n"
+                f"Best match: GlobalSKU {sku} | status={status} | confidence={best.confidence:.3f}\n"
+                f"Reasoning: {best.reasoning}"
+            )
+        if self.spec.task_type == "catalog_duplicate":
+            return (
+                f"Master duplicate scan: '{self.question}'\n"
+                f"Entities in report: {len(best.path)} | confidence={best.confidence:.3f}\n"
+                f"Reasoning: {best.reasoning}"
             )
         return (
             f"Query: '{self.question}'\n"

@@ -46,7 +46,9 @@ from agents.lifecycle_doer import (
 
 from config import (
     NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
+    AGENT_USE_LLM,
 )
+from agents.pipeline_trace import trace
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,10 +138,9 @@ def run_lifecycle_pipeline(
     use_llm: bool = True,
 ) -> PipelineResult:
     """
-    Run a hackathon demo scenario using lifecycle-specific Cypher chains.
+    Run a hackathon demo scenario through the unified four-agent pipeline.
 
-    Uses the proven traversals from agents/lifecycle_doer.py so mandatory
-    scenarios validate under the Critic.
+    Supervisor (forced scenario) → Planner → Doer → Critic.
     """
     if scenario_num is None:
         if not question:
@@ -149,25 +150,7 @@ def run_lifecycle_pipeline(
             return run_pipeline(question, use_llm=use_llm, max_rerouts=0)
 
     question = question or SCENARIO_QUESTIONS[scenario_num]
-    start = time.time()
-    critic = CriticAgent()
-
-    spec, task_list, candidates, closed_rows = run_lifecycle_scenario(
-        scenario_num, question=question, use_llm=use_llm
-    )
-    result = critic.validate(candidates)
-    elapsed = round(time.time() - start, 2)
-
-    pipeline_result = PipelineResult(
-        question=question,
-        spec=spec,
-        tasks=task_list,
-        candidates=candidates,
-        critic_result=result,
-        latency_seconds=elapsed,
-    )
-    pipeline_result._closed_world_rows = closed_rows  # type: ignore[attr-defined]
-    return pipeline_result
+    return run_pipeline(question, use_llm=use_llm, max_rerouts=0, forced_scenario=scenario_num)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,7 +160,7 @@ def run_lifecycle_pipeline(
 def run_sku_pipeline(
     sku_id: str,
     question: str | None = None,
-    use_llm: bool = True,
+    use_llm: bool = AGENT_USE_LLM,
 ) -> PipelineResult:
     """Investigate a single SKU with a distributed root-cause chain."""
     question = question or (
@@ -185,11 +168,30 @@ def run_sku_pipeline(
         f"and what graph evidence supports it."
     )
     start = time.time()
-    critic = CriticAgent()
+    critic = CriticAgent(use_llm=use_llm)
+    trace(
+        "supervisor", "running",
+        "Reading your question",
+        question[:120] + ("…" if len(question) > 120 else ""),
+    )
     spec, task_list, candidates, _ = run_sku_investigation(
         sku_id, question=question, use_llm=use_llm
     )
-    result = critic.validate(candidates)
+    trace(
+        "supervisor", "done",
+        "SKU investigation scoped",
+        f"Tracing evidence for GlobalSKU {sku_id}",
+        task_type=spec.task_type,
+        anchor_sku=sku_id,
+    )
+    trace(
+        "critic", "running",
+        "Quality-checking the evidence",
+        f"Reviewing paths for SKU {sku_id}",
+    )
+    result = critic.validate(
+        candidates, question=question, task_type=spec.task_type,
+    )
     elapsed = round(time.time() - start, 2)
     return PipelineResult(
         question=question,
@@ -203,45 +205,100 @@ def run_sku_pipeline(
 
 def run_pipeline(
     question: str,
-    use_llm: bool = True,
+    use_llm: bool = AGENT_USE_LLM,
     max_rerouts: int = 1,
     anchor_sku: str | None = None,
+    forced_scenario: int | None = None,
+    extra_query_dims: dict | None = None,
 ) -> PipelineResult:
     """
     Run the full 4-agent pipeline on a natural-language question.
 
-    Routes known demo questions to the lifecycle scenario path first.
+    All intent routing goes through Supervisor → Planner → Doer → Critic.
     """
     if anchor_sku:
         return run_sku_pipeline(anchor_sku, question, use_llm=use_llm)
 
-    scenario_num = detect_scenario(question)
-    if scenario_num is not None:
-        return run_lifecycle_pipeline(scenario_num, question, use_llm=use_llm)
-
     start = time.time()
-    get_llm()
-    print(f"[Pipeline] LLM: {bedrock_model_label()}")
-
+    trace(
+        "supervisor", "running",
+        "Reading your question",
+        question[:120] + ("…" if len(question) > 120 else ""),
+    )
     supervisor = SupervisorAgent(use_llm=use_llm)
-    planner    = PlannerAgent()
-    doer       = DoerAgent()
-    critic     = CriticAgent()
+    spec = supervisor.parse(question, forced_scenario=forced_scenario)
+    if extra_query_dims:
+        from agents.dim_match import merge_query_dims
+        spec.query_dims = merge_query_dims(spec.query_dims, extra_query_dims)
 
-    spec       = supervisor.parse(question)
+    is_lifecycle = spec.scenario_num is not None
+    if use_llm and spec.task_type != "catalog_match" and not is_lifecycle:
+        print(f"[Pipeline] LLM: {bedrock_model_label()}")
+
+    planner = PlannerAgent(use_llm=use_llm)
+    doer    = DoerAgent(use_llm=use_llm)
+    critic  = CriticAgent(use_llm=use_llm)
+
+    if is_lifecycle:
+        print(f"[Pipeline] Lifecycle scenario {spec.scenario_num}")
+
+    trace("planner", "running", "Designing the investigation plan", "Choosing Neo4j queries and retrieval steps")
     task_list  = planner.plan(spec)
+    trace(
+        "doer", "running",
+        "Exploring the knowledge graph",
+        f"Running {len(task_list.tasks)} step(s) against Neo4j",
+        task_count=len(task_list.tasks),
+    )
     candidates = doer.execute(task_list)
-    result     = critic.validate(candidates)
+    trace(
+        "critic", "running",
+        "Quality-checking the evidence",
+        f"Reviewing {len(candidates)} candidate chain(s)",
+        candidates=len(candidates),
+    )
+    result     = critic.validate(
+        candidates, question=question, task_type=spec.task_type,
+    )
 
-    # Re-routing: if Critic rejects all chains, increase depth and retry once
     rerout_count = 0
-    while not result.validated and rerout_count < max_rerouts:
+    while (
+        spec.task_type != "catalog_match"
+        and spec.task_type != "catalog_duplicate"
+        and spec.scenario_num is None
+        and not result.validated
+        and rerout_count < max_rerouts
+    ):
         rerout_count += 1
         print(f"\n[Pipeline] Critic rejected all chains. Re-routing (attempt {rerout_count}) ...")
+        trace(
+            "supervisor", "running",
+            "Searching deeper",
+            f"Widening the graph search (attempt {rerout_count})",
+            reroute=rerout_count,
+        )
         spec      = supervisor.parse(question, adjust_depth=1)
         task_list = planner.plan(spec)
+        trace(
+            "doer", "running",
+            "Re-querying Neo4j",
+            f"Running {len(task_list.tasks)} expanded step(s)",
+            task_count=len(task_list.tasks),
+        )
         candidates = doer.execute(task_list)
-        result    = critic.validate(candidates)
+        trace(
+            "critic", "running",
+            "Re-checking the evidence",
+            f"Reviewing {len(candidates)} new candidate chain(s)",
+        )
+        result    = critic.validate(
+            candidates, question=question, task_type=spec.task_type,
+        )
+
+    closed_rows = getattr(doer, "_closed_world_rows", None)
+    if is_lifecycle and spec.scenario_num == 4:
+        n_closed = len(closed_rows or [])
+        print(f"[Pipeline] Scenario 4 A/B — closed_world rows: {n_closed} | reflexive chains: {len(candidates)}")
 
     doer.close()
 
@@ -255,6 +312,17 @@ def run_pipeline(
         critic_result=result,
         latency_seconds=elapsed,
     )
+    match_result = getattr(doer, "_last_match_result", None)
+    if match_result:
+        pipeline_result._match_result = match_result  # type: ignore[attr-defined]
+    dup_report = getattr(doer, "_last_duplicate_report", None)
+    if dup_report is not None:
+        pipeline_result._duplicate_report = dup_report  # type: ignore[attr-defined]
+    result_meta = getattr(doer, "_result_meta", None)
+    if result_meta:
+        pipeline_result._result_meta = result_meta  # type: ignore[attr-defined]
+    if closed_rows is not None:
+        pipeline_result._closed_world_rows = closed_rows  # type: ignore[attr-defined]
 
     return pipeline_result
 
