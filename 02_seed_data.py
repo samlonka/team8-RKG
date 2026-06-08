@@ -2,18 +2,20 @@
 02_seed_data.py — Load, normalize, seed Neo4j, and generate self_emb
 
 Pipeline:
-  1. Load & normalize Global SKU CSV
-  2. Load TenantSKU list from tenant Excel (data/SKU_Export.xlsx)
-  3. Derive Brand, PackageType, Manufacturer, Supplier, ProductClass nodes
-  4. Insert all nodes into Neo4j (MERGE — idempotent)
-  5. Create all relationships (MAPS_TO via UPC, BELONGS_TO_BRAND, etc.)
-  6. Detect fuzzy brand matches → FUZZY_MATCH edges
-  7. Generate self_emb for every node → store on Neo4j node
+  1. Load master + tenant SKU data (PostgreSQL preferred; CSV/Excel fallback)
+  2. Derive Brand, PackageType, Manufacturer, Supplier, ProductClass nodes
+  3. Insert all nodes into Neo4j (MERGE — idempotent)
+  4. Create all relationships (MAPS_TO via UPC, BELONGS_TO_BRAND, etc.)
+  5. Detect fuzzy brand matches → FUZZY_MATCH edges
+  6. Generate self_emb for every node → store on Neo4j node
 
 Usage:
-    python 02_seed_data.py
+    python 12_load_postgres.py          # load master_data + tenant_sku_data first
+    python 02_seed_data.py              # reads from PostgreSQL when configured
+    python 02_seed_data.py --from-csv   # force local CSV / Excel instead
 """
 
+import argparse
 import re
 import uuid
 import numpy as np
@@ -43,71 +45,122 @@ from data.master_loader import (
 # 1. DATA LOADING & NORMALIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_global_sku(path: str) -> pd.DataFrame:
-    """
-    Load Global SKU CSV and normalize fields.
-
-    Key normalizations:
-    - status: uppercase → single canonical form
-    - upc: '00000000None' / '00000000none' → None (flag as missing)
-    - brand_family: strip whitespace, uppercase
-    - package_category_name: strip whitespace
-    - numeric fields: coerce to float, fill NaN with 0
-    """
-    df = pd.read_csv(path, dtype=str, low_memory=False)
-
-    # Strip quotes that CSV may have left on column names
-    df.columns = [c.strip('"').strip() for c in df.columns]
-
-    # Deduplicate: the CSV is a join — keep first occurrence per sku_id
+def normalize_global_sku_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply canonical GlobalSKU normalizations (CSV or PostgreSQL source)."""
+    df = df.copy()
     df = df.drop_duplicates(subset=["sku_id"], keep="first")
 
-    # Status normalization
-    df["status"] = df["status"].str.strip().str.upper().fillna("UNKNOWN")
-
+    df["status"] = df["status"].astype(str).str.strip().str.upper().fillna("UNKNOWN")
     df["upc"] = df["upc"].apply(normalize_upc)
-
-    # Brand family: human-readable, uppercase, strip underscores for display
     df["brand_family"] = (
         df["brand_family"]
         .fillna("UNKNOWN")
+        .astype(str)
         .str.strip()
         .str.upper()
     )
-
-    # brand_name (encoded slug like AQUA_WTR) — keep as-is for graph, decode for text
-    df["brand_name"] = df["brand_name"].fillna("UNKNOWN").str.strip()
-
-    # Package
+    df["brand_name"] = df["brand_name"].fillna("UNKNOWN").astype(str).str.strip()
     df["package_category_name"] = (
-        df["package_category_name"].fillna("UNKNOWN").str.strip()
+        df["package_category_name"].fillna("UNKNOWN").astype(str).str.strip()
     )
     if "package_name" in df.columns:
-        df["package_name"] = df["package_name"].fillna("").str.strip()
+        df["package_name"] = df["package_name"].fillna("").astype(str).str.strip()
 
     df = enrich_global_dataframe(df)
+    df["manufacturer"] = df["manufacturer"].fillna("UNKNOWN").astype(str).str.strip().str.upper()
 
-    # Manufacturer — abbreviations kept as-is
-    df["manufacturer"] = df["manufacturer"].fillna("UNKNOWN").str.strip().str.upper()
-
-    # Numeric fields
     for col in ["weight", "height", "length", "width", "units_per_case"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-    # Boolean flags
     for col in ["is_imaged_on_training_station", "is_imaged_on_wrapper",
                 "is_review_needed", "is_inserted_through_picklist_api"]:
         if col in df.columns:
-            df[col] = df[col].fillna("0").astype(str).str.strip().isin(["1", "true", "True"])
+            if df[col].dtype == bool:
+                df[col] = df[col].fillna(False)
+            else:
+                df[col] = (
+                    df[col].fillna("0")
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .isin(["1", "true", "t", "yes"])
+                )
 
-    # product_category
-    df["product_category"] = df["product_category"].fillna("UNKNOWN").str.strip()
+    df["product_category"] = df["product_category"].fillna("UNKNOWN").astype(str).str.strip()
+    return df
 
-    print(f"  Global SKU loaded: {len(df):,} rows | "
+
+def load_global_sku(path: str) -> pd.DataFrame:
+    """Load Global SKU from CSV and normalize fields."""
+    df = pd.read_csv(path, dtype=str, low_memory=False)
+    df.columns = [c.strip('"').strip() for c in df.columns]
+    df = normalize_global_sku_df(df)
+    print(f"  Global SKU loaded (CSV): {len(df):,} rows | "
           f"{df['upc_missing'].sum():,} missing UPCs | "
           f"{df['brand_family'].nunique()} unique brand families")
     return df
+
+
+def load_global_sku_postgres() -> pd.DataFrame:
+    """Load Global SKU from PostgreSQL ``master_data``."""
+    from data.postgres_store import load_master_dataframe
+
+    df = load_master_dataframe()
+    if df.empty:
+        raise ValueError(
+            "master_data is empty — run `python 12_load_postgres.py` first "
+            "or use --from-csv."
+        )
+    df = normalize_global_sku_df(df)
+    print(f"  Global SKU loaded (PostgreSQL): {len(df):,} rows | "
+          f"{df['upc_missing'].sum():,} missing UPCs | "
+          f"{df['brand_family'].nunique()} unique brand families")
+    return df
+
+
+def load_tenant_sku_postgres() -> pd.DataFrame | None:
+    """Load tenant SKUs from PostgreSQL ``tenant_sku_data``."""
+    from data.postgres_store import load_tenant_dataframe
+
+    df = load_tenant_dataframe()
+    if df.empty:
+        return None
+    print(f"  TenantSKU loaded (PostgreSQL): {len(df):,} rows | "
+          f"{df['brand'].nunique()} brands | "
+          f"{df['supplier'].nunique()} suppliers | "
+          f"{df['product_class'].nunique()} product classes")
+    return df
+
+
+def resolve_source_data(from_csv: bool = False) -> tuple[pd.DataFrame, pd.DataFrame | None, str]:
+    """
+    Resolve master + tenant frames.
+
+    Prefers PostgreSQL when configured and reachable; falls back to local files.
+    """
+    from pathlib import Path
+
+    if not from_csv:
+        try:
+            from data.postgres_store import check_connection, postgres_configured
+
+            if postgres_configured():
+                ok, msg = check_connection()
+                if ok:
+                    df_global = load_global_sku_postgres()
+                    df_tenant = load_tenant_sku_postgres()
+                    return df_global, df_tenant, f"PostgreSQL ({msg})"
+                print(f"  WARN: PostgreSQL configured but unavailable ({msg}) — falling back to files")
+        except Exception as exc:
+            print(f"  WARN: PostgreSQL load failed ({exc}) — falling back to files")
+
+    df_global = load_global_sku(GLOBAL_SKU_CSV)
+    has_tenant = Path(TENANT_SKU_XLSX).exists()
+    df_tenant = load_tenant_sku_excel(TENANT_SKU_XLSX) if has_tenant else None
+    if not has_tenant:
+        print(f"  WARN: {TENANT_SKU_XLSX} not found — seeding GlobalSKU master catalog only.")
+    return df_global, df_tenant, "local CSV / Excel"
 
 
 def load_tenant_sku_excel(path: str) -> pd.DataFrame:
@@ -819,7 +872,7 @@ def create_fuzzy_brand_matches(session, model: SentenceTransformer, df_global: p
 # 7. MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main(from_csv: bool = False):
     print("\n── Loading embedding model ──────────────────────────────────")
     print(f"  Model: {EMBEDDING_MODEL}")
     # Use the Mac GPU (Metal/MPS) when available, else CUDA, else CPU.
@@ -833,12 +886,8 @@ def main():
     model = SentenceTransformer(EMBEDDING_MODEL, device=device)
 
     print("\n── Loading source data ──────────────────────────────────────")
-    df_global = load_global_sku(GLOBAL_SKU_CSV)
-    from pathlib import Path
-    has_tenant = Path(TENANT_SKU_XLSX).exists()
-    df_tenant = load_tenant_sku_excel(TENANT_SKU_XLSX) if has_tenant else None
-    if not has_tenant:
-        print(f"  WARN: {TENANT_SKU_XLSX} not found — seeding GlobalSKU master catalog only.")
+    df_global, df_tenant, source = resolve_source_data(from_csv=from_csv)
+    print(f"  Data source: {source}")
 
     print("\n── Connecting to Neo4j ──────────────────────────────────────")
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
@@ -887,4 +936,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description="Seed Neo4j from PostgreSQL or local files")
+    ap.add_argument(
+        "--from-csv",
+        action="store_true",
+        help="Force local CSV/Excel instead of PostgreSQL",
+    )
+    args = ap.parse_args()
+    main(from_csv=args.from_csv)

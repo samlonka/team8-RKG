@@ -8,8 +8,9 @@
 
 - Python 3.11+
 - Neo4j 5.x running locally (Docker recommended)
-- Amazon Bedrock access to **Claude Opus 4.7** (for agent pipeline — see [README.md](README.md#bedrock-agents))
-- Data files in `data/` (master CSV + vendor Excel)
+- PostgreSQL (team AWS RDS) — connection settings in `.env`
+- Amazon Bedrock access to **Claude Opus 4.7** (for agent pipeline)
+- Bootstrap data files in `data/` (for first Postgres load only)
 
 ## Step 0 — Neo4j via Docker
 
@@ -24,14 +25,14 @@ docker run -d \
 
 Open http://localhost:7474 to verify it's running.
 
-To wipe and reload:
+To wipe and reload the graph:
 
 ```bash
 # In Neo4j Browser or cypher-shell:
 MATCH (n) DETACH DELETE n;
 ```
 
-Then re-run Steps 4–5 below.
+Then re-run Steps 5–6 below.
 
 ## Step 1 — Python environment
 
@@ -46,33 +47,76 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env: Neo4j password, AWS region, optional BEDROCK_MODEL_ID
 ```
 
-## Step 3 — Place data files
+Edit `.env`:
+
+- **Neo4j** — `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
+- **PostgreSQL** — `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (or `POSTGRES_SECRET_ID`)
+- **Bedrock** — `AWS_REGION`, `BEDROCK_MODEL_ID`
+
+Fetch RDS password (zsh: use single quotes):
+
+```bash
+aws secretsmanager get-secret-value \
+  --secret-id 'rds!db-259bad4d-76af-44ff-8967-aa765bb03770' \
+  --region us-east-1 \
+  --query SecretString --output text
+```
+
+## Step 3 — Bootstrap data files (first load only)
 
 ```
 reflexive_kg/
 └── data/
-    ├── vor_sku_data.csv              # Master / Global SKU list (required)
-    ├── SKU_Export.xlsx               # Production vendor export (example)
-    ├── sample_vendor_SKU_Export.xlsx # Schema reference
-    └── Global_sku.csv                # Legacy master (optional)
+    ├── vor_sku_data.csv              # Master / Global SKU list
+    ├── SKU_Export.xlsx               # Example tenant export
+    └── sample_vendor_SKU_Export.xlsx # Schema reference
 ```
 
-Point `GLOBAL_SKU_CSV` / `VENDOR_SKU_XLSX` in `config.py` if your paths differ.
+These files are loaded **into PostgreSQL** by `12_load_postgres.py`. After that, `02_seed_data.py` reads from Postgres by default.
 
-## Step 4 — Run pipeline in order
+## Step 4 — Load PostgreSQL catalog
+
+```bash
+python 12_load_postgres.py
+```
+
+Creates / upserts:
+
+- `master_data` ← `data/vor_sku_data.csv`
+- `tenant_sku_data` + `tenant_data` ← `data/SKU_Export.xlsx`
+
+Options:
+
+```bash
+python 12_load_postgres.py --wipe                    # truncate + reload
+python 12_load_postgres.py --tenant-only path.xlsx   # upsert one tenant file
+```
+
+Verify:
+
+```bash
+python -c "from data.postgres_store import check_connection, table_counts, pg_session; print(check_connection()); 
+with pg_session() as c: print(table_counts(c))"
+```
+
+## Step 5 — Build Neo4j from PostgreSQL
 
 ```bash
 python 01_schema.py
-python 02_seed_data.py
+python 02_seed_data.py              # reads master_data + tenant_sku_data from Postgres
 python 03_reflection.py
 python 03_reflection.py --label GlobalSKU --top 50
-python 03_reflection.py --scores-only    # skip recompute, print scores only
 ```
 
-## Step 5 — Lifecycle demo cohort + verification
+Offline fallback (no RDS):
+
+```bash
+python 02_seed_data.py --from-csv
+```
+
+## Step 6 — Lifecycle demo cohort + verification
 
 ```bash
 python 05_synthesize_lifecycle.py --cohort 300
@@ -85,10 +129,10 @@ python -m pytest test_agents.py test_full_criteria.py -v
 
 | Goal | Command / doc |
 |------|----------------|
-| **New vendor Excel → status** | [README.md — Process a new vendor SKU Excel](README.md#1-process-a-new-vendor-sku-excel-primary-operations-path) |
+| **New vendor Excel → Postgres + graph** | `12_load_postgres.py --tenant-only …` then `ingest_vendor.py` |
 | **LLM agents (Bedrock)** | [README.md — LLM agent pipeline](README.md#4-llm-agent-pipeline-bedrock-opus-47) |
 | **Streamlit UI** | `streamlit run ui/app.py` |
 | **API** | `uvicorn api.main:app --reload --port 8000` |
-| **Synthetic QA vendor** | [README.md — Synthetic vendor QA](README.md#3-synthetic-vendor-qa-controlled-test-buckets) |
+| **DBeaver** | RDS host + `team8_db` + SSL require + password from Secrets Manager |
 
 Handbook-oriented modules: `reflection_core.py`, `scoring.py`, `06_scale_evaluate.py`.

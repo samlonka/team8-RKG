@@ -2,9 +2,12 @@
 PostgreSQL persistence for master catalog and tenant SKU imports.
 
 Tables:
-  master_data      — global SKU catalog (data/vor_sku_data.csv)
-  tenant_sku_data  — per-tenant product rows (Excel imports)
+  master_data      — global SKU catalog (source of truth for Neo4j seed)
+  tenant_sku_data  — per-tenant product rows (Excel / API imports)
   tenant_data      — one row per tenant/warehouse with aggregate stats
+
+Bootstrap:  python 12_load_postgres.py  (CSV/Excel → Postgres)
+Neo4j seed: python 02_seed_data.py      (Postgres → Neo4j, when POSTGRES_* configured)
 """
 
 from __future__ import annotations
@@ -320,6 +323,63 @@ def load_master_csv(path: str | Path | None = None) -> pd.DataFrame:
     df.columns = [c.strip('"').strip() for c in df.columns]
     df = df.drop_duplicates(subset=["sku_id"], keep="first")
     return enrich_global_dataframe(df)
+
+
+def _parse_upc_aliases(val: Any) -> list:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        return json.loads(val) if val.startswith("[") else [val]
+    return list(val)
+
+
+def load_master_dataframe(conn=None) -> pd.DataFrame:
+    """Load master catalog from PostgreSQL ``master_data`` (preferred runtime source)."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection()
+    try:
+        cols = ", ".join(MASTER_COLUMNS)
+        df = pd.read_sql_query(
+            f"SELECT {cols} FROM master_data ORDER BY sku_id",
+            conn,
+        )
+        if df.empty:
+            return df
+        if "upc_aliases" in df.columns:
+            df["upc_aliases"] = df["upc_aliases"].apply(_parse_upc_aliases)
+        return enrich_global_dataframe(df)
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def load_tenant_dataframe(conn=None) -> pd.DataFrame:
+    """Load all tenant SKU rows from PostgreSQL ``tenant_sku_data``."""
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT
+                tenant_id, tenant_sku_id, product_id, warehouse, customer,
+                product_description, brand, supplier, product_class, units_per_case,
+                unit_weight, case_length, case_width, case_height,
+                case_upc, retail_upc, eaches_upc, match_method,
+                pkg_qty, pkg_size, pkg_unit, pkg_container,
+                matched_global_sku_id, match_method_global, source_file
+            FROM tenant_sku_data
+            ORDER BY tenant_id, tenant_sku_id
+            """,
+            conn,
+        )
+        return df
+    finally:
+        if own_conn:
+            conn.close()
 
 
 def upsert_master_data(conn, df: pd.DataFrame) -> int:

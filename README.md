@@ -10,13 +10,39 @@ For Docker/Python install and the one-time graph build sequence, see [README_set
 
 | Capability | Entry point |
 |------------|-------------|
-| Load **Global SKU** master + seed Neo4j | `02_seed_data.py` |
+| Load **master + tenant data** into PostgreSQL | `12_load_postgres.py` |
+| Seed **Neo4j** from PostgreSQL (CSV fallback) | `02_seed_data.py` |
 | Compute **reflection / anomaly** signals | `03_reflection.py` |
-| **Ingest a new vendor Excel** → per-row status | `ingest_vendor.py` |
+| **Ingest a new vendor Excel** → per-row status | `ingest_vendor.py`, API `/tenant/ingest` |
 | **Agent pipeline** (Supervisor → Planner → Doer → Critic) | `04_agent_pipeline.py`, `ui/app.py` |
-| **API** brand/package match (+ agent + KG) | `api/main.py` → `/match`, `/match/agent` |
+| **API** brand/package match (+ agent + KG) | `api/main.py` → `/match`, `/match/agent`, `/query/ask` |
 | **Offline** vendor vs master report (CSV only) | `scripts/eval_vendor_master.py` |
 | **Synthetic** vendor QA set | `scripts/generate_synthetic_vendor.py` |
+
+---
+
+## Data architecture
+
+PostgreSQL (AWS RDS) is the **operational catalog store**. Neo4j is the **knowledge graph** used for embeddings, matching, and agent traversal.
+
+```text
+Bootstrap (one-time or refresh):
+  data/vor_sku_data.csv  ──┐
+  data/SKU_Export.xlsx   ──┼──► 12_load_postgres.py  ──►  PostgreSQL (RDS)
+                           │         master_data
+                           │         tenant_sku_data
+                           │         tenant_data
+                           │
+Graph build:
+  PostgreSQL  ──►  02_seed_data.py  ──►  Neo4j (GlobalSKU, TenantSKU, …)
+```
+
+After the initial bootstrap, **run `02_seed_data.py` without `--from-csv`** and it reads from PostgreSQL automatically when `POSTGRES_*` is configured in `.env`.
+
+Local CSV/Excel files are still used for:
+- **First load into Postgres** (`12_load_postgres.py`)
+- **Fallback** when Postgres is unavailable (`02_seed_data.py --from-csv`)
+- **Offline scripts** (`scripts/eval_vendor_master.py`, synthetic vendor generators)
 
 ---
 
@@ -24,18 +50,41 @@ For Docker/Python install and the one-time graph build sequence, see [README_set
 
 - Python 3.11+
 - Neo4j 5.x (Docker recommended)
-- Master CSV: `data/vor_sku_data.csv`
-- Vendor export: Excel with the same column layout as `data/SKU_Export.xlsx` (or `sample_vendor_SKU_Export.xlsx`)
-- **Amazon Bedrock** access to **Claude Opus 4.7** (required for all LLM agents — no heuristic/API-key fallback)
-- AWS credentials configured (`aws configure` or environment variables)
+- **PostgreSQL** (team AWS RDS — see `.env.example`)
+- Bootstrap files (first load only): `data/vor_sku_data.csv`, `data/SKU_Export.xlsx`
+- **Amazon Bedrock** access to **Claude Opus 4.7** (required for all LLM agents)
+- AWS credentials configured (`aws configure`, `aws login`, or SSO)
 
 ```bash
 cd reflexive_kg
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # edit Neo4j + optional Bedrock overrides
+cp .env.example .env   # edit Neo4j + PostgreSQL + Bedrock
 ```
+
+### PostgreSQL (`.env`)
+
+```env
+POSTGRES_HOST=your-rds-host.amazonaws.com
+POSTGRES_PORT=5432
+POSTGRES_DB=team8_db
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=...              # or leave empty + POSTGRES_SECRET_ID
+POSTGRES_SECRET_ID=rds!db-...      # fetched via AWS Secrets Manager
+POSTGRES_SSLMODE=require
+```
+
+Fetch the RDS password (use **single quotes** in zsh — `!` in the secret id breaks double quotes):
+
+```bash
+aws secretsmanager get-secret-value \
+  --secret-id 'rds!db-259bad4d-76af-44ff-8967-aa765bb03770' \
+  --region us-east-1 \
+  --query SecretString --output text
+```
+
+Paste the `password` field into `POSTGRES_PASSWORD` for DBeaver and local Python.
 
 ### Bedrock (agents)
 
@@ -60,15 +109,32 @@ Enable **Claude Opus 4.7** in AWS Console → Bedrock → Model access. If the b
 
 ---
 
-## One-time graph setup
+## One-time setup
 
-Run once (or after wiping Neo4j). Full commands: [README_setup.md](README_setup.md).
+Run once (or after wiping Neo4j / Postgres). Full commands: [README_setup.md](README_setup.md).
 
 ```bash
+# 1. Load catalog into PostgreSQL
+python 12_load_postgres.py
+
+# 2. Build Neo4j graph from PostgreSQL
 python 01_schema.py
-python 02_seed_data.py
+python 02_seed_data.py              # reads master_data + tenant_sku_data from Postgres
 python 03_reflection.py --label GlobalSKU
 python 05_synthesize_lifecycle.py --cohort 300   # demo cohort + planted anomalies
+```
+
+Force local files instead of Postgres (offline / no RDS):
+
+```bash
+python 02_seed_data.py --from-csv
+```
+
+Refresh tenant rows in Postgres only:
+
+```bash
+python 12_load_postgres.py --tenant-only data/new_client.xlsx
+python 02_seed_data.py              # re-seed Neo4j from updated Postgres
 ```
 
 ---
@@ -79,28 +145,29 @@ python 05_synthesize_lifecycle.py --cohort 300   # demo cohort + planted anomali
 
 Use this when you receive a **new client vendor file** and need **per-SKU status** against the Global SKU graph.
 
-**Input:** Vendor `.xlsx` in the same schema as `data/SKU_Export.xlsx` (warehouse, Product ID, Brand, Product Description, UPC columns, dimensions, etc.).
+**Input:** Vendor `.xlsx` in the same schema as `data/SKU_Export.xlsx`.
 
-**Prerequisites:** Steps in [One-time graph setup](#one-time-graph-setup) completed; Neo4j running.
+**Prerequisites:** [One-time setup](#one-time-setup) completed; Neo4j running; Postgres configured for persistence.
 
 ```bash
-# Ingest your file (path can be anywhere)
+# Upsert into PostgreSQL + optional Neo4j ingest
+python 12_load_postgres.py --tenant-only data/MyNewVendor_Export.xlsx
 python ingest_vendor.py data/MyNewVendor_Export.xlsx
 
 # Re-print summary of the last run
 python ingest_vendor.py --report
 ```
 
+Or via **Streamlit** → **Tenant import** tab, or **API** `POST /tenant/ingest`.
+
 **Console report** (end of ingest) includes counts for:
 
 | Status | Meaning |
 |--------|---------|
-| **AUTO_MATCH** | Confidence ≥ 0.90 — `MAPS_TO` edge created to a GlobalSKU (UPC / ANN / brand-block signals). |
-| **REVIEW_QUEUE** | Confidence 0.65–0.90 — `MatchCandidate` node; human must approve or reject. |
-| **CREATE_NEW** | Confidence &lt; 0.65 — `GlobalSKUDraft` for analyst review (no auto link). |
-| **UNCHANGED** | Same `product_id` already in graph with identical key fields — no rematch. |
-
-**Delta types** (before routing): `NEW`, `FIELD_UPDATE`, `UNCHANGED`, `UPC_CONFLICT` (existing row maps to a different GlobalSKU UPC).
+| **AUTO_MATCH** | Confidence ≥ 0.90 — `MAPS_TO` edge created to a GlobalSKU |
+| **REVIEW_QUEUE** | Confidence 0.65–0.90 — `MatchCandidate` node |
+| **CREATE_NEW** | Confidence &lt; 0.65 — `GlobalSKUDraft` for analyst review |
+| **UNCHANGED** | Same `product_id` already in graph with identical key fields |
 
 **Review workflow:**
 
@@ -110,72 +177,42 @@ python ingest_vendor.py --approve <product_id>
 python ingest_vendor.py --reject <product_id>
 ```
 
-**Large files** (skip post-merge anomaly pass):
-
-```bash
-python ingest_vendor.py data/MyNewVendor_Export.xlsx --skip-validation
-```
-
-**Change default paths** in `config.py`:
-
-```python
-GLOBAL_SKU_CSV  = "data/vor_sku_data.csv"
-VENDOR_SKU_XLSX = "data/SKU_Export.xlsx"   # default for scripts only
-```
-
-`ingest_vendor.py` always takes the Excel path as a **CLI argument**; you do not need to copy the file to `data/` unless you want to.
-
 ---
 
 ### 2. Offline vendor vs master report (no Neo4j)
 
-Quick CSV evaluation against the master catalog only (UPC lookup + optional API-style brand/package scoring). Does **not** write to Neo4j.
+Quick CSV evaluation against the master catalog only. Does **not** write to Neo4j or Postgres.
 
 ```bash
 python scripts/eval_vendor_master.py --vendor data/MyNewVendor_Export.xlsx
-# → reports/match_report.csv
-python scripts/eval_vendor_master.py --vendor data/MyNewVendor_Export.xlsx --full   # slower: calls match API logic
+python scripts/eval_vendor_master.py --vendor data/MyNewVendor_Export.xlsx --full
 ```
-
-Use this for a **first-pass** read before ingest, or when Neo4j is not available.
 
 ---
 
 ### 3. Synthetic vendor QA (controlled test buckets)
 
-Generate a small vendor file with known ground truth:
-
 ```bash
-python scripts/generate_synthetic_vendor.py              # 50 rows
-python scripts/generate_synthetic_vendor.py --with-edges   # 74 rows (edge cases)
+python scripts/generate_synthetic_vendor.py
+python scripts/generate_synthetic_vendor.py --with-edges
 python scripts/test_synthetic_vendor.py --vendor data/synthetic_vendor_74.xlsx --full
 python ingest_vendor.py data/synthetic_vendor_74.xlsx
 ```
-
-Manifest: `data/synthetic_vendor_*_manifest.json`. Results: `reports/synthetic_vendor_test_results.csv`.
 
 ---
 
 ### 4. LLM agent pipeline (Bedrock Opus 4.7)
 
-Four agents over the reflexive KG:
-
 ```text
-Supervisor (Bedrock) → Planner (templates + Bedrock rationale) → Doer (Neo4j) → Critic (rules + Bedrock)
+Supervisor (Bedrock) → Planner → Doer (Neo4j) → Critic
 ```
 
-**Full generic pipeline** (Planner + generic Doer ANN/Cypher):
-
-```bash
-python 04_agent_pipeline.py --ask "Which GlobalSKUs are most at risk before model training?"
-```
-
-**Hackathon scenarios 1–6** (Supervisor + lifecycle Cypher chains + Critic; fixed demo paths):
+**Hackathon scenarios 1–6:**
 
 ```bash
 python 04_agent_pipeline.py --scenario 1
 python 04_agent_pipeline.py --scenario 4    # closed-world vs reflexive A/B
-python 04_agent_pipeline.py --demo          # all six scenarios
+python 04_agent_pipeline.py --demo
 ```
 
 | Scenario | Topic |
@@ -193,9 +230,7 @@ python 04_agent_pipeline.py --demo          # all six scenarios
 streamlit run ui/app.py
 ```
 
-Ask tab and scenario buttons use the same Bedrock-backed pipeline (Neo4j required).
-
-**Tests** (Bedrock tests skip if AWS unavailable):
+**Tests:**
 
 ```bash
 python -m pytest test_agents.py test_full_criteria.py -v
@@ -203,27 +238,28 @@ python -m pytest test_agents.py test_full_criteria.py -v
 
 ---
 
-### 5. HTTP API — match without full ingest
+### 5. HTTP API
 
 ```bash
 uvicorn api.main:app --reload --port 8000
 ```
 
-| Endpoint | LLM / Neo4j | Use |
-|----------|----------------|-----|
-| `POST /match` | No / CSV only | Fast string match on master CSV |
-| `POST /match/agent` | Bedrock reasoning + Neo4j KG | ANN + graph signals + anomaly health |
-| `GET /health` | — | `sku_count`, `neo4j_available`, `embeddings_available` |
+| Endpoint | Use |
+|----------|-----|
+| `POST /query/ask` | NL question → agent pipeline |
+| `POST /tenant/ingest` | Upload tenant Excel (async) |
+| `POST /match` | Fast string match (in-memory master CSV at startup) |
+| `POST /match/agent` | Agent match with Neo4j KG |
+| `GET /health` | Neo4j, Postgres, and SKU counts |
 
 Example:
 
 ```bash
-curl -s -X POST http://localhost:8000/match/agent \
+curl -s -X POST http://localhost:8000/query/ask \
   -H "Content-Type: application/json" \
-  -d '{"brand_name": "BIG RED", "package_type": "20OZ PL 1/24"}' | python -m json.tool
+  -d '{"question": "Why did model accuracy degrade after the recent customer import?"}' \
+  | python -m json.tool
 ```
-
-`/match/agent` does **not** replace `ingest_vendor.py` for bulk Excel; use ingest for warehouse `product_id` lifecycle and `REVIEW_QUEUE` / drafts.
 
 ---
 
@@ -243,18 +279,20 @@ jupyter notebook RKG_Demo.ipynb
 ```mermaid
 flowchart TD
   Excel[New vendor Excel]
-  Excel --> Eval[eval_vendor_master.py]
-  Eval --> CSV[match_report.csv]
-  Excel --> Ingest[ingest_vendor.py]
-  Ingest --> Neo4j[(Neo4j RKG)]
-  Neo4j --> Status[AUTO_MATCH / REVIEW / CREATE_NEW]
+  Excel --> PG[12_load_postgres.py]
+  PG --> RDS[(PostgreSQL RDS)]
+  RDS --> Seed[02_seed_data.py]
+  Seed --> Neo4j[(Neo4j RKG)]
+  Excel --> Ingest[ingest_vendor.py / API]
+  Ingest --> Neo4j
   Neo4j --> Agents[04_agent_pipeline / UI]
   Agents --> Bedrock[Bedrock Opus 4.7]
 ```
 
-- **ingest_vendor.py** — operational truth in the graph, review queue, drafts.
-- **Agents** — explain anomalies, trace root cause, demo scenarios; Bedrock required.
-- **eval_vendor_master.py** — spreadsheet-friendly report without loading Neo4j.
+- **12_load_postgres.py** — persist master + tenant catalog in RDS.
+- **02_seed_data.py** — build / refresh Neo4j from Postgres.
+- **ingest_vendor.py** — operational per-row match status, review queue, drafts.
+- **Agents** — explain anomalies, trace root cause, demo scenarios.
 
 ---
 
@@ -263,25 +301,25 @@ flowchart TD
 | Variable / setting | Default | Purpose |
 |--------------------|---------|---------|
 | `NEO4J_URI` | `bolt://localhost:7687` | Graph database |
-| `GLOBAL_SKU_CSV` | `data/vor_sku_data.csv` | Master catalog |
-| `VENDOR_SKU_XLSX` | `data/SKU_Export.xlsx` | Default vendor path for scripts |
+| `POSTGRES_HOST` | *(required for Postgres path)* | AWS RDS host |
+| `POSTGRES_DB` | `team8_db` | Catalog database |
+| `POSTGRES_PASSWORD` | *(or Secrets Manager)* | RDS auth |
+| `POSTGRES_SSLMODE` | `require` | TLS for RDS |
+| `GLOBAL_SKU_CSV` | `data/vor_sku_data.csv` | Bootstrap master file |
+| `VENDOR_SKU_XLSX` | `data/SKU_Export.xlsx` | Bootstrap tenant file |
 | `BEDROCK_MODEL_ID` | `anthropic.claude-opus-4-7` | All agent LLM calls |
-| `BEDROCK_REGION` | `us-east-1` | AWS region |
-| `MATCH_AUTO_THRESHOLD` | `0.90` | Ingest auto-match |
-| `MATCH_REVIEW_THRESHOLD` | `0.65` | Ingest review queue |
 
 ---
 
-## Key design decisions
+## PostgreSQL tables
 
-| Decision | Rationale |
-|----------|-----------|
-| `all-mpnet-base-v2` | Better semantics for short brand/supplier phrases |
-| `brand_family` in embeddings | Human-readable vs encoded `brand_name` slug |
-| `package_category_name` in embeddings | e.g. `1.5L PL 1/12` vs numeric `package_type_id` |
-| Neo4j vector indexes | Single store for graph + ANN |
-| Multi-UPC master join | `upc`, `each_upc`, `case_upc`, etc. on GlobalSKU |
-| Bedrock-only agents | No Anthropic API key / heuristic Supervisor fallback |
+| Table | Contents |
+|-------|----------|
+| `master_data` | Global SKU catalog (from `vor_sku_data.csv`) |
+| `tenant_sku_data` | Per-tenant product rows (from Excel imports) |
+| `tenant_data` | One aggregate row per tenant/warehouse |
+
+Inspect with DBeaver using the RDS host, `team8_db`, SSL **require**, and the password from Secrets Manager.
 
 ---
 
@@ -289,12 +327,14 @@ flowchart TD
 
 | Problem | What to check |
 |---------|----------------|
-| `LLMError` / Bedrock init failed | `pip install anthropic`, AWS creds, model access for Opus 4.7 |
-| Ingest all `CREATE_NEW` | Run `02_seed_data.py`; confirm master CSV path |
-| No `AUTO_MATCH` | UPC column populated; run `scripts/eval_vendor_master.py` on same file |
+| `PostgreSQL connection failed` | `POSTGRES_*` in `.env`, AWS creds for Secrets Manager, RDS security group allows your IP |
+| `zsh: event not found: db` | Use single quotes around the Secrets Manager secret id |
+| `master_data is empty` | Run `python 12_load_postgres.py` before `02_seed_data.py` |
+| Neo4j seed uses CSV unexpectedly | Postgres unreachable — fix connection or pass `--from-csv` |
+| `LLMError` / Bedrock init failed | AWS creds, model access for Opus 4.7 |
 | Agent pipeline empty | Run `05_synthesize_lifecycle.py`; Neo4j sidebar green in UI |
-| Stale SKUs in Neo4j | Wipe graph: `MATCH (n) DETACH DELETE n` then re-run setup |
-| `--no-llm` removed | Agents always require Bedrock |
+| `POST /ask` returns 404 | Correct path is `POST /query/ask` |
+| Stale graph | Wipe Neo4j: `MATCH (n) DETACH DELETE n` then re-run setup |
 
 ---
 
@@ -302,13 +342,14 @@ flowchart TD
 
 ```text
 reflexive_kg/
-├── 01_schema.py … 05_synthesize_lifecycle.py   # graph build + lifecycle demo
+├── 12_load_postgres.py                         # CSV/Excel → PostgreSQL
+├── 01_schema.py … 05_synthesize_lifecycle.py   # Neo4j build + lifecycle demo
+├── 02_seed_data.py                             # PostgreSQL → Neo4j seed
 ├── 04_agent_pipeline.py                        # four-agent orchestrator
 ├── ingest_vendor.py                            # vendor Excel → status
-├── api/main.py                                 # /match, /match/agent
-├── agents/                                     # supervisor, planner, doer, critic, llm
-├── data/                                       # vor_sku_data.csv, vendor xlsx, synthetic
-├── scripts/                                    # eval, synthetic vendor generators
-├── ui/app.py                                   # Streamlit
-└── config.py                                   # paths, thresholds, Bedrock model
+├── api/main.py                                 # REST API
+├── data/postgres_store.py                      # Postgres schema + upserts
+├── agents/                                     # supervisor, planner, doer, critic
+├── ui/app.py                                   # Streamlit workbench
+└── config.py                                   # paths, thresholds, Bedrock
 ```
