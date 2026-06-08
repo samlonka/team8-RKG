@@ -20,6 +20,7 @@ from __future__ import annotations
 import difflib
 import importlib
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from data.master_loader import load_master_sku_records
 # ── thresholds (same as string-matching endpoint) ─────────────────────────────
 MERGE_THRESHOLD  = 0.85
 UPDATE_THRESHOLD = 0.60
+LLM_TRUST_MIN    = 0.30   # below this composite score the LLM indicator is ignored
 
 # ── composite score weights ───────────────────────────────────────────────────
 W_ANN         = 0.40   # semantic similarity (ANN on self_emb)
@@ -189,17 +191,27 @@ _BRAND_FUZZY_THRESHOLD   = 0.75
 _PACKAGE_FUZZY_THRESHOLD = 0.75
 
 
+def _norm_brand(s: str) -> str:
+    """Normalize a brand string: underscores/hyphens → spaces, uppercase, collapse spaces."""
+    return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", s)).strip().upper()
+
+
 def _brand_block(session, brand_name: str) -> list[str]:
     """
     GlobalSKU IDs whose brand_name matches the query.
 
-    Step 1 — exact case-insensitive match in Neo4j.
+    Normalizes underscores and hyphens to spaces before comparison so that
+    "BANG_BDAY_CAKE_BS" matches a graph value of "BANG BDAY CAKE BS".
+
+    Step 1 — exact case-insensitive match in Neo4j (normalized form).
     Step 2 — if no exact hits, fetch all distinct brand_names and apply
-             Python difflib fuzzy matching (ratio ≥ _BRAND_FUZZY_THRESHOLD),
-             then fetch SKU IDs for the matched names.
+             Python difflib fuzzy matching (ratio ≥ _BRAND_FUZZY_THRESHOLD)
+             with both sides normalized.
     """
+    brand_q = _norm_brand(brand_name)
+
     try:
-        # Step 1: exact match
+        # Step 1: exact match on normalized brand name
         rows = session.run(
             """
             MATCH (g:GlobalSKU)
@@ -207,23 +219,22 @@ def _brand_block(session, brand_name: str) -> list[str]:
             RETURN DISTINCT g.sku_id AS sid
             LIMIT 50
             """,
-            brand=brand_name,
+            brand=brand_q,
         ).data()
         if rows:
             return [r["sid"] for r in rows]
 
-        # Step 2: fuzzy fallback — no native Neo4j fuzzy without APOC,
-        # so fetch all distinct brand names and match in Python.
+        # Step 2: fuzzy fallback — normalize both sides before comparing.
         all_brands = session.run(
             "MATCH (g:GlobalSKU) WHERE g.brand_name IS NOT NULL "
             "RETURN DISTINCT g.brand_name AS bn"
         ).data()
 
-        q = brand_name.upper()
         matched = [
             r["bn"] for r in all_brands
-            if difflib.SequenceMatcher(None, q, (r["bn"] or "").upper()).ratio()
-            >= _BRAND_FUZZY_THRESHOLD
+            if difflib.SequenceMatcher(
+                None, brand_q, _norm_brand(r["bn"] or "")
+            ).ratio() >= _BRAND_FUZZY_THRESHOLD
         ]
         if not matched:
             return []
@@ -274,6 +285,20 @@ _PKG_WORD_TO_NUM: dict[str, str] = {
     "sixty-four": "64",   "one-hundred": "100",
 }
 
+# Container-type abbreviation synonyms (lowercase keys → canonical form).
+# Applied after word-to-number conversion so "can" → "cn" not confused with numbers.
+_CONTAINER_SYNONYMS: dict[str, str] = {
+    "can":     "cn",
+    "cans":    "cn",
+    "bottle":  "bt",
+    "bottles": "bt",
+    "btl":     "bt",
+    "plastic": "pl",
+    "pet":     "pl",
+    "pack":    "pk",
+    "pkg":     "pk",
+}
+
 
 def _canonicalize_package(text: str) -> str:
     """
@@ -297,7 +322,8 @@ def _canonicalize_package(text: str) -> str:
     for phrase, digit in _PKG_PHRASE_MAP:
         s = s.replace(phrase, digit)
 
-    # Phase 2: token-level conversion; split "/" compound tokens independently
+    # Phase 2: token-level conversion; split "/" compound tokens independently.
+    # After number-word conversion, apply container-type synonyms (e.g. "can" → "cn").
     tokens = s.split()
     normalized = []
     for token in tokens:
@@ -305,10 +331,34 @@ def _canonicalize_package(text: str) -> str:
             parts = [_PKG_WORD_TO_NUM.get(p, p) for p in token.split("/")]
             normalized.append("/".join(parts))
         else:
-            normalized.append(_PKG_WORD_TO_NUM.get(token, token))
+            t = _PKG_WORD_TO_NUM.get(token, token)
+            t = _CONTAINER_SYNONYMS.get(t, t)
+            normalized.append(t)
 
     # Phase 3: uppercase and strip all whitespace
     return "".join(normalized).upper()
+
+
+def _canonical_sorted(text: str) -> str:
+    """
+    Like _canonicalize_package but with tokens sorted alphabetically before joining.
+    Used as a secondary comparison tier (quality 0.90) that is order-independent:
+    "1/12 16OZ CAN" and "16OZ CN 1/12" both reduce to the same sorted string.
+    """
+    s = text.lower().strip()
+    for phrase, digit in _PKG_PHRASE_MAP:
+        s = s.replace(phrase, digit)
+    tokens = s.split()
+    normalized = []
+    for token in tokens:
+        if "/" in token:
+            parts = [_PKG_WORD_TO_NUM.get(p, p) for p in token.split("/")]
+            normalized.append("/".join(parts))
+        else:
+            t = _PKG_WORD_TO_NUM.get(token, token)
+            t = _CONTAINER_SYNONYMS.get(t, t)
+            normalized.append(t)
+    return "".join(sorted(t.upper() for t in normalized))
 
 
 def _package_block(session, package_type: str) -> dict[str, float]:
@@ -343,10 +393,16 @@ def _package_block(session, package_type: str) -> dict[str, float]:
             return {r["sid"]: float(r["quality"]) for r in rows}
 
         # Step 2: fetch all distinct package names and canonicalize both sides.
+        # Three comparison tiers (quality 1.0 → 0.90 → 0.70):
+        #   1.0  exact canonical match
+        #   0.90 same tokens, different order  ("1/12 16OZ CAN" == "16OZ CN 1/12")
+        #   0.70 fuzzy match (difflib ratio ≥ threshold)
         all_pkgs = session.run(
             "MATCH (g:GlobalSKU) WHERE g.package_category_name IS NOT NULL "
             "RETURN DISTINCT g.package_category_name AS pkg"
         ).data()
+
+        query_canon_sorted = _canonical_sorted(package_type)
 
         pkg_quality: dict[str, float] = {}
         for r in all_pkgs:
@@ -356,6 +412,8 @@ def _package_block(session, package_type: str) -> dict[str, float]:
                 continue
             if query_canon == graph_canon:
                 pkg_quality[graph_pkg] = 1.0
+            elif _canonical_sorted(graph_pkg) == query_canon_sorted:
+                pkg_quality[graph_pkg] = 0.9
             elif difflib.SequenceMatcher(
                 None, query_canon, graph_canon
             ).ratio() >= _PACKAGE_FUZZY_THRESHOLD:
@@ -380,7 +438,10 @@ def _package_block(session, package_type: str) -> dict[str, float]:
 
 
 def _fetch_candidates_by_ids(session, sku_ids: list[str]) -> list[dict]:
-    """Fetch full candidate records for a list of SKU IDs."""
+    """Fetch full candidate records for a list of SKU IDs.
+    self_emb is included so _enrich_with_kg can compute ann_sim for these
+    candidates (which were found via brand/package graph signals, not ANN).
+    """
     if not sku_ids:
         return []
     try:
@@ -399,12 +460,13 @@ def _fetch_candidates_by_ids(session, sku_ids: list[str]) -> list[dict]:
                    g.length              AS length,
                    g.width               AS width,
                    g.anomaly_attn        AS anomaly_attn,
-                   g.reflect_emb_attn    AS reflect_emb
+                   g.reflect_emb_attn    AS reflect_emb,
+                   g.self_emb            AS self_emb
             """,
             ids=sku_ids,
         ).data()
         for r in rows:
-            r["ann_sim"] = 0.0
+            r["ann_sim"] = 0.0   # placeholder; overwritten by _enrich_with_kg
             r["signals"] = []
         return rows
     except Exception:
@@ -430,19 +492,23 @@ def _cosine(a: np.ndarray | list, b: np.ndarray | list) -> float:
 
 def _enrich_with_kg(candidates: list[dict], query_emb: np.ndarray) -> list[dict]:
     """
-    For each candidate add:
-      reflect_sim  — how similar query_emb is to the candidate's reflect_emb
-                     (high = query matches the candidate's KG neighborhood)
-      anomaly_attn — already fetched from Neo4j; 0=healthy, 1=anomalous
+    For each candidate compute / finalize:
+      ann_sim      — cosine(query_emb, self_emb) for brand/package-block candidates
+                     that were not returned by ANN (their ann_sim is 0.0 placeholder).
+                     ANN candidates already carry the correct score from Neo4j.
+      reflect_sim  — cosine(query_emb, reflect_emb_attn)
+      anomaly_attn — normalise to [0, 1]; None → 0 (assume healthy)
     """
     for c in candidates:
-        reflect_raw = c.get("reflect_emb")
-        if reflect_raw is not None:
-            c["reflect_sim"] = _cosine(query_emb, reflect_raw)
-        else:
-            c["reflect_sim"] = 0.0
+        # Point 1: compute ann_sim for non-ANN candidates using their self_emb
+        if c.get("ann_sim", 0.0) == 0.0:
+            self_raw = c.get("self_emb")
+            if self_raw is not None:
+                c["ann_sim"] = _cosine(query_emb, self_raw)
 
-        # Normalize anomaly_attn to [0, 1]; None → 0 (assume healthy)
+        reflect_raw = c.get("reflect_emb")
+        c["reflect_sim"] = _cosine(query_emb, reflect_raw) if reflect_raw is not None else 0.0
+
         attn = c.get("anomaly_attn")
         c["anomaly_attn"] = float(attn) if attn is not None else 0.0
 
@@ -455,15 +521,21 @@ def _enrich_with_kg(candidates: list[dict], query_emb: np.ndarray) -> list[dict]
 
 def _brand_match_score(candidate: dict, brand_name_query: str, brand_ids: set[str]) -> float:
     """
-    Brand matching score:
-      1.0  exact brand_name match on the GlobalSKU node
-      0.75 fuzzy match found via KG brand-block query
-      0.0  no brand signal
+    Brand matching score — continuous, not binary:
+      1.00  exact normalized match  (underscores/hyphens treated as spaces)
+      0.75  found via KG brand-block query (fuzzy Neo4j lookup)
+      0–0.74 partial credit for near-miss brands not in brand_block
+             (difflib ratio × 0.74, floor at ratio ≥ 0.50)
+      0.00  no signal
     """
-    cand_brand = (candidate.get("brand_name") or "").upper()
-    if cand_brand == brand_name_query.upper():
+    query_norm = _norm_brand(brand_name_query)
+    cand_norm  = _norm_brand(candidate.get("brand_name") or "")
+    if cand_norm == query_norm:
         return 1.0
-    return 0.75 if candidate.get("sku_id") in brand_ids else 0.0
+    if candidate.get("sku_id") in brand_ids:
+        return 0.75
+    ratio = difflib.SequenceMatcher(None, query_norm, cand_norm).ratio()
+    return round(ratio * 0.74, 4) if ratio >= 0.50 else 0.0
 
 
 def _pkg_match_score(candidate: dict, pkg_quality: dict[str, float]) -> float:
@@ -478,22 +550,24 @@ def _composite_score(
     brand_ids: set[str],
 ) -> float:
     """
-    Composite score weights:
-      45% brand match   — primary identity signal
-      35% package match — secondary identity signal
-      15% ANN sim       — semantic embedding (fallback when brand/pkg unknown)
-       5% reflect sim   — KG neighbourhood context
-      -10% anomaly      — data-quality health penalty
+    Composite score (clamped to [0, 1]):
 
-    Brand + package signals dominate ANN because the ANN index was built with
-    brand_family='UNKNOWN' for most SKUs, making it unable to distinguish
-    between brands in embedding space.
+      45%  brand match   — continuous 0–1.0 (exact / brand-block / partial difflib)
+      35%  package match — 1.0 / 0.90 (sorted-token) / 0.70 (fuzzy) tiers
+                           Point 3: sorted-token tier closes positional-mismatch gap
+      15%  ANN sim       — now non-zero for brand/package-block candidates (Point 1)
+       5%  reflect sim   — KG neighbourhood context
+      -10% anomaly       — capped at 0.50 so one old bad event can't tank a match (Point 5)
+      +5%  multi-signal  — bonus when brand + package + ANN all independently agree (Point 4)
     """
     brand   = _brand_match_score(c, brand_name_query, brand_ids)
     pkg     = _pkg_match_score(c, pkg_quality)
     ann     = float(c.get("ann_sim", 0.0))
     reflect = float(c.get("reflect_sim", 0.0))
-    anomaly = float(c.get("anomaly_attn", 0.0))
+    anomaly = min(float(c.get("anomaly_attn", 0.0)), 0.5)  # Point 5: cap penalty
+
+    # Point 4: bonus when all three independent signal types corroborate
+    multi_signal_bonus = 0.05 if (brand > 0 and pkg > 0 and ann > 0) else 0.0
 
     score = (
         0.45 * brand
@@ -501,6 +575,7 @@ def _composite_score(
       + 0.15 * ann
       + 0.05 * reflect
       - 0.10 * anomaly
+      + multi_signal_bonus
     )
     return round(max(0.0, min(1.0, score)), 4)
 
@@ -560,20 +635,26 @@ def _heuristic_reasoning(
     return " ".join(parts)
 
 
-def _llm_reasoning(
+def _llm_decision(
     brand_name: str, package_type: str, best: dict, score: float,
-    status: str, all_candidates: list[dict],
-) -> str:
-    """Bedrock (Claude Opus 4.7) reasoning for the match decision — required."""
-    from agents.llm import get_llm
+    score_status: str, all_candidates: list[dict],
+) -> dict[str, str]:
+    """
+    Ask the LLM to analyze the match and return both a recommendation indicator
+    and a reasoning explanation.
+
+    Returns {"indicator": "merged"|"updated"|"insert", "reasoning": "..."}.
+    Falls back to score_status as indicator if the LLM fails or returns invalid JSON.
+    """
+    from agents.llm import get_llm, LLMError
 
     top3 = all_candidates[:3]
     cand_text = "\n".join(
         f"  - SKU {c.get('sku_id')}: brand={c.get('brand_name')}, "
         f"package={c.get('package_category_name')}, "
-        f"score={c.get('composite_score', 0):.4f}, "
-        f"ann={c.get('ann_sim', 0):.3f}, "
-        f"reflect={c.get('reflect_sim', 0):.3f}, "
+        f"composite_score={c.get('composite_score', 0):.4f}, "
+        f"ann_sim={c.get('ann_sim', 0):.3f}, "
+        f"reflect_sim={c.get('reflect_sim', 0):.3f}, "
         f"anomaly_attn={c.get('anomaly_attn', 0):.3f}"
         for c in top3
     )
@@ -589,16 +670,64 @@ INPUT:
 TOP CANDIDATES FROM REFLEXIVE KNOWLEDGE GRAPH:
 {cand_text}
 
-DECISION: status={status}, confidence={score:.4f}
+COMPOSITE SCORE: {score:.4f}  (score-based status: {score_status})
 
-Explain in 2-3 sentences WHY this match decision was made. Mention:
-- How well the brand and package aligned
-- What the KG graph signals (ANN similarity, reflect neighborhood, anomaly health) indicate
-- Whether the decision is confident or needs human review
+Analyze:
+- How well the brand and package descriptor align with the top candidate
+- What the KG graph signals (ANN similarity, reflect neighbourhood, anomaly health) indicate
+- Whether the match is confident, needs human review, or has no valid match
 
-Be concise and specific. Do not repeat the numbers verbatim."""
+Based on your analysis, choose ONE indicator:
+  "merged"  — confident match, safe to link automatically
+  "updated" — partial or uncertain match, needs human review before linking
+  "insert"  — no valid match found, a new GlobalSKU should be created
 
-    return get_llm().complete(prompt, max_tokens=256)
+Return a JSON object with exactly two fields:
+  "indicator" : one of "merged", "updated", "insert"
+  "reasoning" : 2-3 sentences explaining your analysis and decision
+
+Return JSON only. No extra text."""
+
+    try:
+        result = get_llm().json(prompt, max_tokens=300)
+        indicator = str(result.get("indicator", "")).lower().strip()
+        reasoning = str(result.get("reasoning", ""))
+        if indicator not in ("merged", "updated", "insert"):
+            indicator = score_status
+        return {"indicator": indicator, "reasoning": reasoning}
+    except (LLMError, Exception) as e:
+        reasoning = _heuristic_reasoning(
+            brand_name, package_type, best, score, score_status,
+            set(), {},
+        )
+        return {"indicator": score_status, "reasoning": f"[LLM unavailable: {e}] {reasoning}"}
+
+
+def _combine_status(score: float, llm_indicator: str) -> str:
+    """
+    Combine the composite score and the LLM indicator into a final status.
+
+    Rules:
+      score ≥ MERGE_THRESHOLD (0.85)  → always "merged"  (score is definitive)
+      score < LLM_TRUST_MIN   (0.30)  → always "insert"  (ignore LLM; no signal)
+
+    Ambiguous zone [LLM_TRUST_MIN, MERGE_THRESHOLD):
+      LLM "merged"  + score ≥ UPDATE_THRESHOLD → "merged"
+      LLM "merged"  + score < UPDATE_THRESHOLD → "updated"  (escalate for review)
+      LLM "updated"                            → "updated"
+      LLM "insert"                             → score-based fallback
+    """
+    if score >= MERGE_THRESHOLD:
+        return "merged"
+    if score < LLM_TRUST_MIN:
+        return "insert"
+    # Ambiguous zone: LLM can influence the final status
+    if llm_indicator == "merged":
+        return "merged" if score >= UPDATE_THRESHOLD else "updated"
+    if llm_indicator == "updated":
+        return "updated"
+    # LLM says insert — fall back to score threshold
+    return "updated" if score >= UPDATE_THRESHOLD else "insert"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -692,15 +821,16 @@ def agent_match(
     best  = ranked[0]
     score = best["composite_score"]
 
-    # ── Step 5: Critic — reasoning ────────────────────────────────────────────
-    if score >= MERGE_THRESHOLD:
-        status = "merged"
-    elif score >= UPDATE_THRESHOLD:
-        status = "updated"
-    else:
-        status = "insert"
-
-    reasoning = _llm_reasoning(brand_name, package_type, best, score, status, ranked)
+    # ── Step 5: Critic — LLM indicator + reasoning + combined status ─────────
+    score_status = (
+        "merged"  if score >= MERGE_THRESHOLD  else
+        "updated" if score >= UPDATE_THRESHOLD else
+        "insert"
+    )
+    llm_result    = _llm_decision(brand_name, package_type, best, score, score_status, ranked)
+    llm_indicator = llm_result["indicator"]
+    reasoning     = llm_result["reasoning"]
+    status        = _combine_status(score, llm_indicator)
 
     # ── Step 6: Build response ────────────────────────────────────────────────
     matched_skus = [
@@ -729,10 +859,12 @@ def agent_match(
     ]
 
     return {
-        "status":       status,
-        "confidence":   score,
-        "reasoning":    reasoning,
-        "ambiguous":    (
+        "status":        status,
+        "score_status":  score_status,    # pure threshold decision before LLM influence
+        "llm_indicator": llm_indicator,   # LLM's own recommendation
+        "confidence":    score,
+        "reasoning":     reasoning,
+        "ambiguous":     (
             len(ranked) >= 2
             and abs(ranked[0]["composite_score"] - ranked[1]["composite_score"]) < 0.05
         ),
@@ -743,10 +875,10 @@ def agent_match(
         },
         "kg_available": True,
         "pipeline": {
-            "ann_candidates":   len(ann_results),
-            "brand_block_hits": len(brand_ids),
+            "ann_candidates":    len(ann_results),
+            "brand_block_hits":  len(brand_ids),
             "package_block_hits": len(pkg_ids),
-            "total_candidates": len(ranked),
+            "total_candidates":  len(ranked),
         },
     }
 
