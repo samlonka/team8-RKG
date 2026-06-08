@@ -91,6 +91,7 @@ def _run_job(job_id: str, skip_validation: bool) -> None:
             skip_validation=skip_validation,
             write_graph=True,
         )
+        _sync_postgres_tenant(job.source_path)
         with _LOCK:
             job = JOBS[job_id]
             job.status = "completed"
@@ -103,6 +104,16 @@ def _run_job(job_id: str, skip_validation: bool) -> None:
             job.status = "failed"
             job.completed_at = _now()
             job.error = f"{exc}\n{traceback.format_exc()}"
+
+
+def _sync_postgres_tenant(source_path: str) -> None:
+    """Upsert uploaded tenant Excel into PostgreSQL tenant tables."""
+    try:
+        from data.postgres_store import sync_tenant_xlsx
+
+        sync_tenant_xlsx(source_path)
+    except Exception as exc:
+        print(f"[ingest] PostgreSQL sync failed (Neo4j ingest succeeded): {exc}")
 
 
 def start_job_async(job_id: str, skip_validation: bool = False) -> None:

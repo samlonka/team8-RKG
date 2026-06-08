@@ -618,11 +618,31 @@ def match_agent_endpoint(req: MatchRequest):
 def health():
     db = _load_sku_db()
     from api.agent_matcher import neo4j_available, embeddings_available
+    from data.postgres_store import check_connection as pg_check, postgres_configured, table_counts, pg_session
+
+    pg_ok, pg_msg = pg_check()
+    pg_counts: dict[str, int] = {}
+    if pg_ok:
+        try:
+            with pg_session() as conn:
+                pg_counts = table_counts(conn)
+        except Exception:
+            pg_ok = False
+            pg_msg = "Connected but could not read table counts"
+
+    from config import POSTGRES_DB, POSTGRES_HOST
+
     return {
         "status":               "ok",
         "sku_count":            len(db),
         "neo4j_available":      neo4j_available(),
         "embeddings_available": embeddings_available(),
+        "postgres_configured":  postgres_configured(),
+        "postgres_available":   pg_ok,
+        "postgres_message":     pg_msg,
+        "postgres_host":        POSTGRES_HOST or None,
+        "postgres_db":          POSTGRES_DB or None,
+        "postgres_counts":      pg_counts,
     }
 
 

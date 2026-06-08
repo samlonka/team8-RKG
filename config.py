@@ -20,6 +20,16 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 EMBEDDING_DIM   = 768
 
+# ── PostgreSQL (AWS RDS) — set all values in .env ─────────────────────────────
+POSTGRES_HOST             = os.getenv("POSTGRES_HOST", "")
+POSTGRES_PORT             = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_DB               = os.getenv("POSTGRES_DB", "")
+POSTGRES_USER             = os.getenv("POSTGRES_USER", "")
+POSTGRES_PASSWORD         = os.getenv("POSTGRES_PASSWORD", "")
+POSTGRES_SECRET_ID        = os.getenv("POSTGRES_SECRET_ID", "")
+POSTGRES_CONNECT_TIMEOUT  = int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "15"))
+POSTGRES_SSLMODE          = os.getenv("POSTGRES_SSLMODE", "").strip() or None
+
 # ── Data file paths ───────────────────────────────────────────────────────────
 # Place your source files in the data/ folder (or update these paths)
 # Master global catalog (handbook §2 — GlobalSKU / master SKU list)
@@ -134,9 +144,10 @@ MATCH_REVIEW_THRESHOLD    = 0.65   # confidence ≥ this → human review queue
 MATCH_ANN_TOP_K           = 10     # ANN candidates per TenantSKU
 MATCH_ANOMALY_ALERT_DELTA = 0.10   # flag GlobalSKU if anomaly_attn rises by ≥ this after ingest
 
-# ── Bedrock LLM (all agents — Claude Opus 4.7, no heuristic fallback) ───────
+# ── Amazon Bedrock LLM (all agents — Claude Opus 4.7, no heuristic fallback) ───────
+AWS_REGION       = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-opus-4-7")
-BEDROCK_REGION   = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+BEDROCK_REGION   = AWS_REGION
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 EMBED_BATCH_SIZE = 64   # sentence-transformer batch size

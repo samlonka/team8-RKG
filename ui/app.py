@@ -466,6 +466,79 @@ def page_settings():
     st.code("python 06_scale_evaluate.py --sample 5000  # catalog-scale eval", language="bash")
 
 
+def page_tenant_import():
+    st.markdown("## Tenant import")
+    st.caption(
+        "Upload a tenant SKU Excel (SKU_Export.xlsx format). "
+        "Rows are upserted into PostgreSQL `tenant_sku_data` and `tenant_data`, "
+        "then matched against the global master catalog."
+    )
+
+    from data.postgres_store import check_connection as pg_check, pg_session, table_counts, sync_tenant_xlsx
+
+    pg_ok, pg_msg = pg_check()
+    if pg_ok:
+        st.success(f"PostgreSQL: {pg_msg}")
+        try:
+            with pg_session() as conn:
+                counts = table_counts(conn)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Master SKUs", f"{counts.get('master_data', 0):,}")
+            c2.metric("Tenants", f"{counts.get('tenant_data', 0):,}")
+            c3.metric("Tenant SKU rows", f"{counts.get('tenant_sku_data', 0):,}")
+        except Exception as e:
+            st.warning(f"Could not read Postgres counts: {e}")
+    else:
+        st.error(f"PostgreSQL unavailable: {pg_msg}")
+        st.info("Copy `.env.example` to `.env` and set POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER.")
+
+    uploaded = st.file_uploader(
+        "Tenant Excel (.xlsx)",
+        type=["xlsx", "xls"],
+        help="Same column layout as data/SKU_Export.xlsx",
+    )
+    sync_neo4j = st.checkbox("Also run Neo4j ingest pipeline (match / review / draft)", value=True)
+
+    if st.button("Import to PostgreSQL", type="primary", disabled=uploaded is None or not pg_ok):
+        import tempfile
+        from pathlib import Path
+
+        suffix = Path(uploaded.name).suffix or ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded.getvalue())
+            tmp_path = tmp.name
+
+        with st.spinner("Upserting tenant rows into PostgreSQL …"):
+            try:
+                result = sync_tenant_xlsx(tmp_path)
+                st.success(
+                    f"Upserted **{result['tenant_sku_rows']:,}** SKU rows "
+                    f"across **{result['tenants']:,}** tenant(s)."
+                )
+            except Exception as e:
+                st.exception(e)
+                return
+
+        if sync_neo4j:
+            with st.spinner("Running Neo4j tenant ingest …"):
+                try:
+                    from ingest_vendor import run_tenant_ingest
+
+                    out = run_tenant_ingest(tmp_path, write_graph=True)
+                    st.info(
+                        f"Neo4j ingest complete — "
+                        f"AUTO_MATCH={out.summary.get('AUTO_MATCH', 0)}, "
+                        f"REVIEW={out.summary.get('REVIEW_QUEUE', 0)}, "
+                        f"CREATE_NEW={out.summary.get('CREATE_NEW', 0)}"
+                    )
+                except Exception as e:
+                    st.warning(f"Neo4j ingest failed (Postgres data was saved): {e}")
+
+        with pg_session() as conn:
+            counts = table_counts(conn)
+        st.json(counts)
+
+
 def main():
     init_session()
     sidebar()
@@ -479,6 +552,7 @@ def main():
         "A/B Compare",
         "Boundaries",
         "Pre-flight",
+        "Tenant import",
         "Settings",
     ]
     goto = st.session_state.pop("goto_tab", None)
@@ -500,6 +574,7 @@ def main():
         "A/B Compare": page_ab_compare,
         "Boundaries": page_boundaries,
         "Pre-flight": page_preflight,
+        "Tenant import": page_tenant_import,
         "Settings": page_settings,
     }[page]()
 
