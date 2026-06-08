@@ -96,7 +96,7 @@ def rank_anomalies(session, label: str, top_n: int = 20) -> list[dict]:
     # Pull label-specific display fields
     label_field = {
         "GlobalSKU":    "n.brand_family AS brand, n.package_category_name AS pkg, n.upc_missing AS upc_missing",
-        "VendorSKU":    "n.brand AS brand, n.product_description AS pkg, false AS upc_missing",
+        "TenantSKU":    "n.brand AS brand, n.product_description AS pkg, false AS upc_missing",
         "Brand":        "n.brand_family AS brand, '' AS pkg, false AS upc_missing",
         "PackageType":  "n.package_category_name AS brand, '' AS pkg, false AS upc_missing",
         "Manufacturer": "n.name AS brand, '' AS pkg, false AS upc_missing",
@@ -250,7 +250,7 @@ def missing_upc_anomaly_check(session) -> None:
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-ALL_LABELS = ["GlobalSKU", "VendorSKU", "Brand", "PackageType",
+ALL_LABELS = ["GlobalSKU", "TenantSKU", "Brand", "PackageType",
               "Manufacturer", "Supplier", "ProductClass"]
 
 

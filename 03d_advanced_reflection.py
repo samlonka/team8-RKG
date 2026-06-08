@@ -71,7 +71,7 @@ from config import (
 from score_log import log_batch_run, ensure_indexes as _ensure_log_indexes
 
 ALL_LABELS = [
-    "GlobalSKU", "VendorSKU", "Brand", "PackageType",
+    "GlobalSKU", "TenantSKU", "Brand", "PackageType",
     "Manufacturer", "Supplier", "ProductClass",
 ]
 
@@ -80,7 +80,7 @@ _NOW_DAYS = (datetime.now(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.u
 
 def _pk(label: str) -> str:
     return {
-        "GlobalSKU":    "sku_id",    "VendorSKU":   "product_id",
+        "GlobalSKU":    "sku_id",    "TenantSKU":   "tenant_sku_id",
         "Brand":        "brand_id",  "PackageType":  "package_type_id",
         "Manufacturer": "name",      "Supplier":     "name",
         "ProductClass": "name",

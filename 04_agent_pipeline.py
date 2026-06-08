@@ -35,6 +35,7 @@ from agents.supervisor import SupervisorAgent
 from agents.planner    import PlannerAgent
 from agents.doer       import DoerAgent
 from agents.critic     import CriticAgent
+from agents.entity_display import format_entity_node, sku_summary
 from agents.models     import PipelineResult, TaskList
 from agents.lifecycle_doer import (
     SCENARIO_QUESTIONS,
@@ -86,7 +87,13 @@ def print_ab_comparison(closed_results: list[dict], pipeline_result: PipelineRes
     if closed_results:
         print(f"│ Results: {len(closed_results)} rows")
         for r in closed_results[:5]:
-            print(f"│   {r}")
+            line = sku_summary(
+                r.get("sku") or r.get("sku_id", "?"),
+                r.get("brand_name"),
+                r.get("brand_family") or r.get("brand"),
+                r.get("package_type"),
+            )
+            print(f"│   {line}")
     else:
         print("│ Results: (no data)")
         print("│")
@@ -109,7 +116,7 @@ def print_ab_comparison(closed_results: list[dict], pipeline_result: PipelineRes
         print(f"│ Top anomalous entities:")
         top = sorted(best.path, key=lambda n: n.anomaly_score or 0, reverse=True)[:5]
         for n in top:
-            print(f"│   [{n.label}] {n.display_name:<30} score={n.anomaly_score}")
+            print(f"│   {format_entity_node(n)}")
         print(f"│")
         print(f"│ No rule was written. Geometry detected it.")
     else:
@@ -281,8 +288,7 @@ def print_pipeline_result(result: PipelineResult, scenario_num: int | None = Non
 
         top_entities = sorted(chain.path, key=lambda n: n.anomaly_score or 0, reverse=True)
         for node in top_entities[:8]:
-            score_str = f"{node.anomaly_score:.3f}" if node.anomaly_score else "  —  "
-            print(f"       [{node.label:<13}] {node.display_name:<35} score={score_str}")
+            print(f"       {format_entity_node(node)}")
 
         print(f"\n     Reasoning:")
         for line in chain.reasoning.split(". "):

@@ -70,12 +70,12 @@ from score_log import log_batch_run, ensure_indexes as _ensure_log_indexes
 MANIFEST_PATH = "seed_manifest.json"
 
 ALL_LABELS = [
-    "GlobalSKU", "VendorSKU", "Brand", "PackageType",
+    "GlobalSKU", "TenantSKU", "Brand", "PackageType",
     "Manufacturer", "Supplier", "ProductClass",
 ]
 
 PK_MAP = {
-    "GlobalSKU":    "sku_id",   "VendorSKU":  "product_id",
+    "GlobalSKU":    "sku_id",   "TenantSKU":  "tenant_sku_id",
     "Brand":        "brand_id", "PackageType": "package_type_id",
     "Manufacturer": "name",     "Supplier":    "name",
     "ProductClass": "name",

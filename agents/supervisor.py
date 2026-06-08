@@ -15,20 +15,26 @@ from agents.llm import LLMError, bedrock_model_label, get_llm
 from agents.models import QuerySpec
 
 KNOWN_LABELS = {
-    "GlobalSKU", "VendorSKU", "Brand",
-    "PackageType", "Manufacturer", "Supplier", "ProductClass",
+    "GlobalSKU", "TenantSKU", "Brand", "Customer",
+    "PackageType", "TrainingImage", "MergeEvent", "Pallet",
+    "Manufacturer", "Supplier", "ProductClass",
 }
 
-SYSTEM_PROMPT = """You are a query parser for a knowledge graph system that manages SKU (product) data.
+SYSTEM_PROMPT = """You are a query parser for a reflexive knowledge graph (handbook Use Case 3 — SKU data lifecycle).
 
 The graph has these node types:
-- GlobalSKU: master product records with UPC, brand, package, manufacturer
-- VendorSKU: customer-submitted product records that map to GlobalSKUs
-- Brand: brand entities (e.g. "BIG RED", "PEPSI", "3D ENERGY")
-- PackageType: package formats (e.g. "20OZ PL 1/24", "16OZ CN 1/12")
-- Manufacturer: e.g. "PEPSI", "PBC", "GULF"
-- Supplier: vendor companies e.g. "3D ENERGY DRINKS LLC"
-- ProductClass: e.g. "NON ALC", "CRAFT BEER", "FMB"
+- GlobalSKU: master catalog SKU (from vor_sku_data.csv) — UPC, brand, package, weight
+- TenantSKU: customer-specific product record at import (Stage 1) — maps to GlobalSKU via MAPS_TO
+- Brand: brand entities; may be canonical or newly created (duplicate) at import
+- Customer: warehouse/distributor using VOR; connected via USED_BY
+- PackageType: physical format (bottle, can, box)
+- TrainingImage: labelled training images linked via TRAINED_WITH
+- MergeEvent: SKU merge/remap audit log linked via MERGED_INTO
+- Pallet: production scan events linked via SCANNED_ON
+- Manufacturer, Supplier, ProductClass: catalog metadata
+
+Key lifecycle traversal for root_cause:
+  TenantSKU → MAPS_TO → GlobalSKU → BELONGS_TO_BRAND → Brand → FUZZY_MATCH
 
 Given a natural-language question, extract and return ONLY valid JSON with these fields:
 

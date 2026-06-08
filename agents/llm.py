@@ -86,5 +86,27 @@ def get_llm() -> LLM:
     return _LLM
 
 
+def bedrock_credentials_available() -> bool:
+    """True if boto3 can resolve AWS credentials (profile, env, or instance role)."""
+    try:
+        import boto3
+        creds = boto3.Session().get_credentials()
+        return creds is not None and bool(getattr(creds, "access_key", None))
+    except Exception:
+        return False
+
+
+def probe_bedrock(max_tokens: int = 8) -> None:
+    """
+    Verify Bedrock is callable. Raises LLMError if credentials or model access fail.
+    """
+    if not bedrock_credentials_available():
+        raise LLMError(
+            "AWS credentials not configured. Set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY "
+            "or run `aws configure`, or export AWS_PROFILE. See .env.example."
+        )
+    get_llm().complete("Reply with OK.", max_tokens=max_tokens)
+
+
 def bedrock_model_label() -> str:
     return f"Bedrock {BEDROCK_MODEL_ID} ({BEDROCK_REGION})"

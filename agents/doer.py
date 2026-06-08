@@ -28,23 +28,31 @@ from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
 # ── Primary key per label ─────────────────────────────────────────────────────
 PK = {
-    "GlobalSKU":    "sku_id",
-    "VendorSKU":    "product_id",
-    "Brand":        "brand_id",
-    "PackageType":  "package_type_id",
-    "Manufacturer": "name",
-    "Supplier":     "name",
-    "ProductClass": "name",
+    "GlobalSKU":     "sku_id",
+    "TenantSKU":     "tenant_sku_id",
+    "Brand":         "brand_id",
+    "Customer":      "customer_id",
+    "PackageType":   "package_type_id",
+    "TrainingImage": "image_id",
+    "MergeEvent":    "merge_id",
+    "Pallet":        "pallet_id",
+    "Manufacturer":  "name",
+    "Supplier":      "name",
+    "ProductClass":  "name",
 }
 
 DISPLAY_FIELD = {
-    "GlobalSKU":    "brand_family",
-    "VendorSKU":    "brand",
-    "Brand":        "brand_family",
-    "PackageType":  "package_category_name",
-    "Manufacturer": "name",
-    "Supplier":     "name",
-    "ProductClass": "name",
+    "GlobalSKU":     "brand_family",
+    "TenantSKU":     "brand",
+    "Brand":         "brand_family",
+    "Customer":      "name",
+    "PackageType":   "package_category_name",
+    "TrainingImage": "image_id",
+    "MergeEvent":    "merge_id",
+    "Pallet":        "pallet_id",
+    "Manufacturer":  "name",
+    "Supplier":      "name",
+    "ProductClass":  "name",
 }
 
 

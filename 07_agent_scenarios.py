@@ -12,6 +12,7 @@ from neo4j import GraphDatabase
 
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from agents.critic import CriticAgent
+from agents.entity_display import format_entity_node, sku_summary
 from agents.lifecycle_doer import LifecycleDoer, SCENARIO_QUESTIONS
 from agents.llm import bedrock_model_label, get_llm
 from agents.supervisor import SupervisorAgent
@@ -40,6 +41,9 @@ def show(title, chain, critic):
         for nde in c.path:
             labels[nde.label] = labels.get(nde.label, 0) + 1
         print(f"  evidence: {dict(labels)}")
+        for nde in c.path:
+            if nde.label == "GlobalSKU":
+                print(f"    {format_entity_node(nde)}")
     else:
         print(f"  REJECTED  confidence={res.rejected[0].confidence:.3f} (< {critic.threshold})")
     return res
@@ -66,8 +70,11 @@ def main():
             show("SCENARIO 2 - Cross-source weak-signal fusion", doer.multi_signal_chain(), critic)
 
         def s3():
-            for i, (sku, s) in enumerate(doer.risk_rank(20), 1):
-                print(f"  {i:2}. SKU {sku}  score={s:.3f}")
+            for i, row in enumerate(doer.risk_rank_detailed(20), 1):
+                print(
+                    f"  {i:2}. {sku_summary(row['sku_id'], row['brand_name'], row['brand_family'], row['package_type'])}  "
+                    f"score={row['score']:.3f}"
+                )
 
         def s4():
             cw = doer.closed_world_brand_dupes()

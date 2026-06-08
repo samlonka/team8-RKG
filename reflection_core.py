@@ -21,7 +21,7 @@ from config import (
 
 PK = {
     "GlobalSKU": "sku_id",
-    "VendorSKU": "product_id",
+    "TenantSKU": "tenant_sku_id",
     "Brand": "brand_id",
     "PackageType": "package_type_id",
     "Manufacturer": "name",

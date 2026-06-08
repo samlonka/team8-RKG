@@ -98,7 +98,7 @@ def _ensure_schema(session) -> None:
     """Create indexes for new node types introduced by the ingestion pipeline."""
     ddl = [
         "CREATE INDEX idx_match_candidate_vendor IF NOT EXISTS "
-        "FOR (n:MatchCandidate) ON (n.vendor_sku_id)",
+        "FOR (n:MatchCandidate) ON (n.tenant_sku_id)",
 
         "CREATE INDEX idx_match_candidate_status IF NOT EXISTS "
         "FOR (n:MatchCandidate) ON (n.status)",
@@ -143,7 +143,7 @@ def _fingerprint(row: dict) -> str:
 
 def detect_delta(session, df) -> tuple[dict, dict]:
     """
-    Compare incoming rows against existing VendorSKU nodes.
+    Compare incoming rows against existing TenantSKU nodes.
 
     Returns:
         classified  : {product_id: 'NEW'|'UNCHANGED'|'FIELD_UPDATE'|'UPC_CONFLICT'}
@@ -151,8 +151,8 @@ def detect_delta(session, df) -> tuple[dict, dict]:
     """
     existing = session.run(
         """
-        MATCH (v:VendorSKU)
-        RETURN v.product_id    AS pid,
+        MATCH (v:TenantSKU)
+        RETURN v.tenant_sku_id AS pid,
                v._fingerprint  AS fp,
                v.retail_upc    AS rupc,
                v.case_upc      AS cupc
@@ -498,11 +498,11 @@ def route(candidates: list[Candidate], delta_status: str) -> Decision:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _upsert_vendor_sku(session, row: dict, emb: np.ndarray, run_id: str):
-    """Write (or update) a VendorSKU node with its self_emb and fingerprint."""
+    """Write (or update) a TenantSKU node with its self_emb and fingerprint."""
     fp = _fingerprint(row)
     session.run(
         """
-        MERGE (v:VendorSKU {product_id: $pid})
+        MERGE (v:TenantSKU {tenant_sku_id: $pid})
         SET v.product_description = $desc,
             v.brand               = $brand,
             v.supplier            = $supplier,
@@ -553,7 +553,7 @@ def _upsert_vendor_sku(session, row: dict, emb: np.ndarray, run_id: str):
 def execute_auto_match(session, row: dict, emb: np.ndarray,
                        match: Candidate, run_id: str) -> str:
     """
-    Upsert the VendorSKU, create (or update) the MAPS_TO edge to the matched
+    Upsert the TenantSKU, create (or update) the MAPS_TO edge to the matched
     GlobalSKU. Store confidence and signals on the edge for traceability.
     Returns the matched GlobalSKU ID.
     """
@@ -561,7 +561,7 @@ def execute_auto_match(session, row: dict, emb: np.ndarray,
 
     session.run(
         """
-        MATCH (v:VendorSKU  {product_id: $pid})
+        MATCH (v:TenantSKU  {tenant_sku_id: $pid})
         MATCH (g:GlobalSKU  {sku_id:     $sid})
         MERGE (v)-[e:MAPS_TO]->(g)
         SET e.match_method   = $method,
@@ -584,7 +584,7 @@ def execute_auto_match(session, row: dict, emb: np.ndarray,
 def execute_review_queue(session, row: dict, emb: np.ndarray,
                          candidates: list[Candidate], run_id: str):
     """
-    Upsert the VendorSKU. Write up to 3 MatchCandidate nodes (one per top
+    Upsert the TenantSKU. Write up to 3 MatchCandidate nodes (one per top
     candidate) so the analyst can pick the right one.
     """
     _upsert_vendor_sku(session, row, emb, run_id)
@@ -595,11 +595,11 @@ def execute_review_queue(session, row: dict, emb: np.ndarray,
         mc_id = str(uuid.uuid4())
         session.run(
             """
-            MATCH (v:VendorSKU {product_id: $pid})
+            MATCH (v:TenantSKU {tenant_sku_id: $pid})
             MATCH (g:GlobalSKU {sku_id: $sid})
             CREATE (mc:MatchCandidate {
                 mc_id:          $mc_id,
-                vendor_sku_id:  $pid,
+                tenant_sku_id:  $pid,
                 global_sku_id:  $sid,
                 confidence:     $conf,
                 signals:        $signals,
@@ -622,7 +622,7 @@ def execute_review_queue(session, row: dict, emb: np.ndarray,
 
 def execute_create_new(session, row: dict, emb: np.ndarray, run_id: str) -> str:
     """
-    Upsert the VendorSKU and create a GlobalSKUDraft that an analyst can
+    Upsert the TenantSKU and create a GlobalSKUDraft that an analyst can
     review and promote to a real GlobalSKU when ready.
     Returns the draft_id.
     """
@@ -630,10 +630,10 @@ def execute_create_new(session, row: dict, emb: np.ndarray, run_id: str) -> str:
     draft_id = str(uuid.uuid4())
     session.run(
         """
-        MATCH (v:VendorSKU {product_id: $pid})
+        MATCH (v:TenantSKU {tenant_sku_id: $pid})
         CREATE (d:GlobalSKUDraft {
             draft_id:            $did,
-            source_vendor_sku_id: $pid,
+            source_tenant_sku_id: $pid,
             brand_family:        $brand,
             product_class:       $cls,
             units_per_case:      $upc,
@@ -733,9 +733,9 @@ def show_review_queue(session):
     """Print all pending MatchCandidate items."""
     rows = session.run(
         """
-        MATCH (v:VendorSKU)-[:HAS_CANDIDATE]->(mc:MatchCandidate {status:'PENDING'})
+        MATCH (v:TenantSKU)-[:HAS_CANDIDATE]->(mc:MatchCandidate {status:'PENDING'})
               -[:CANDIDATE_FOR]->(g:GlobalSKU)
-        RETURN v.product_id    AS vendor_id,
+        RETURN v.tenant_sku_id AS vendor_id,
                v.brand         AS vendor_brand,
                g.sku_id        AS global_id,
                g.brand_family  AS global_brand,
@@ -765,24 +765,24 @@ def show_review_queue(session):
         )
 
 
-def approve_match(session, vendor_sku_id: str):
+def approve_match(session, tenant_sku_id: str):
     """
     Approve the highest-confidence pending candidate for a vendor SKU.
     Creates the MAPS_TO edge and marks all candidates for this vendor as APPROVED/REJECTED.
     """
     rows = session.run(
         """
-        MATCH (v:VendorSKU {product_id: $pid})-[:HAS_CANDIDATE]->
+        MATCH (v:TenantSKU {tenant_sku_id: $pid})-[:HAS_CANDIDATE]->
               (mc:MatchCandidate {status:'PENDING'})-[:CANDIDATE_FOR]->(g:GlobalSKU)
         RETURN mc.mc_id AS mc_id, g.sku_id AS sid, mc.confidence AS conf,
                mc.signals AS signals
         ORDER BY conf DESC LIMIT 1
         """,
-        pid=vendor_sku_id,
+        pid=tenant_sku_id,
     ).data()
 
     if not rows:
-        print(f"  No pending candidates for vendor SKU '{vendor_sku_id}'.")
+        print(f"  No pending candidates for vendor SKU '{tenant_sku_id}'.")
         return
 
     best = rows[0]
@@ -790,7 +790,7 @@ def approve_match(session, vendor_sku_id: str):
 
     session.run(
         """
-        MATCH (v:VendorSKU  {product_id: $pid})
+        MATCH (v:TenantSKU  {tenant_sku_id: $pid})
         MATCH (g:GlobalSKU  {sku_id:     $sid})
         MERGE (v)-[e:MAPS_TO]->(g)
         SET e.match_method  = $method,
@@ -799,7 +799,7 @@ def approve_match(session, vendor_sku_id: str):
             e.matched_at    = $ts,
             e.approved_by   = 'analyst'
         """,
-        pid=vendor_sku_id, sid=best["sid"],
+        pid=tenant_sku_id, sid=best["sid"],
         method="|".join(best["signals"] or []),
         conf=best["conf"], signals=best["signals"],
         ts=now,
@@ -808,18 +808,18 @@ def approve_match(session, vendor_sku_id: str):
     # Mark all candidates for this vendor as resolved
     session.run(
         """
-        MATCH (:VendorSKU {product_id: $pid})-[:HAS_CANDIDATE]->(mc:MatchCandidate)
+        MATCH (:TenantSKU {tenant_sku_id: $pid})-[:HAS_CANDIDATE]->(mc:MatchCandidate)
         SET mc.status     = CASE WHEN mc.mc_id = $best_id THEN 'APPROVED' ELSE 'REJECTED' END,
             mc.resolved_at = $ts
         """,
-        pid=vendor_sku_id, best_id=best["mc_id"], ts=now,
+        pid=tenant_sku_id, best_id=best["mc_id"], ts=now,
     )
 
-    print(f"  Approved: VendorSKU '{vendor_sku_id}' → GlobalSKU '{best['sid']}' "
+    print(f"  Approved: TenantSKU '{tenant_sku_id}' → GlobalSKU '{best['sid']}' "
           f"(confidence={best['conf']:.3f})")
 
 
-def reject_match(session, vendor_sku_id: str):
+def reject_match(session, tenant_sku_id: str):
     """
     Reject all candidates for a vendor SKU and promote it to a GlobalSKUDraft.
     """
@@ -828,31 +828,31 @@ def reject_match(session, vendor_sku_id: str):
     # Mark all candidates as rejected
     session.run(
         """
-        MATCH (:VendorSKU {product_id: $pid})-[:HAS_CANDIDATE]->(mc:MatchCandidate)
+        MATCH (:TenantSKU {tenant_sku_id: $pid})-[:HAS_CANDIDATE]->(mc:MatchCandidate)
         SET mc.status = 'REJECTED', mc.resolved_at = $ts
         """,
-        pid=vendor_sku_id, ts=now,
+        pid=tenant_sku_id, ts=now,
     )
 
     # Create a GlobalSKUDraft if one doesn't already exist
     row = session.run(
-        "MATCH (v:VendorSKU {product_id: $pid}) "
+        "MATCH (v:TenantSKU {tenant_sku_id: $pid}) "
         "RETURN v.product_description AS desc, v.brand AS brand, "
         "       v.product_class AS cls, v.units_per_case AS upc, "
         "       v.unit_weight AS wt, v.retail_upc AS rupc, "
         "       v.case_upc AS cupc, v.supplier AS sup, v.self_emb AS emb",
-        pid=vendor_sku_id,
+        pid=tenant_sku_id,
     ).single()
 
     if not row:
-        print(f"  VendorSKU '{vendor_sku_id}' not found.")
+        print(f"  TenantSKU '{tenant_sku_id}' not found.")
         return
 
     draft_id = str(uuid.uuid4())
     session.run(
         """
-        MATCH (v:VendorSKU {product_id: $pid})
-        MERGE (v)-[:PROPOSED_AS]->(d:GlobalSKUDraft {source_vendor_sku_id: $pid})
+        MATCH (v:TenantSKU {tenant_sku_id: $pid})
+        MERGE (v)-[:PROPOSED_AS]->(d:GlobalSKUDraft {source_tenant_sku_id: $pid})
         SET d.draft_id            = $did,
             d.brand_family        = $brand,
             d.product_class       = $cls,
@@ -866,14 +866,14 @@ def reject_match(session, vendor_sku_id: str):
             d.status              = 'DRAFT',
             d.created_at          = $ts
         """,
-        pid=vendor_sku_id, did=draft_id,
+        pid=tenant_sku_id, did=draft_id,
         brand=row["brand"], cls=row["cls"],
         upc=row["upc"], wt=row["wt"],
         rupc=row["rupc"], cupc=row["cupc"],
         desc=row["desc"], sup=row["sup"],
         emb=row["emb"], ts=now,
     )
-    print(f"  Rejected all candidates for '{vendor_sku_id}' → created GlobalSKUDraft {draft_id[:8]}…")
+    print(f"  Rejected all candidates for '{tenant_sku_id}' → created GlobalSKUDraft {draft_id[:8]}…")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -982,6 +982,257 @@ def print_ingest_report(decisions: list[Decision], alerts: list[dict], vendor_fi
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# API / PROGRAMMATIC INGEST (async Excel jobs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class TenantIngestRowResult:
+    tenant_sku_id:       str
+    product_id:          str
+    brand:               str
+    product_description: str
+    delta_status:        str
+    action:              str
+    matched_global_sku:  str | None
+    confidence:          float | None
+    match_signals:       list[str]
+    reasoning:           str
+
+
+@dataclass
+class TenantIngestResult:
+    run_id:        str
+    source_file:   str
+    output_file:   str | None
+    started_at:    str
+    completed_at:  str
+    summary:       dict
+    rows:          list[TenantIngestRowResult]
+    alerts:        list[dict]
+
+
+def decision_reasoning(dec: Decision) -> str:
+    """Human-readable reasoning for Excel output and API responses."""
+    if dec.action == "UNCHANGED":
+        return (
+            "No change detected since last ingest — brand, package, UPC, and "
+            "metadata match the stored fingerprint."
+        )
+    if dec.action == "CREATE_NEW":
+        if not dec.all_candidates:
+            return (
+                "No GlobalSKU candidate met the review threshold. "
+                "Brand/package/UPC did not align with the master catalog — "
+                "queued as GlobalSKUDraft for analyst review."
+            )
+        best = dec.all_candidates[0]
+        return (
+            f"Best candidate GlobalSKU {best.global_sku_id} scored "
+            f"{best.confidence:.3f} (below auto-match {MATCH_AUTO_THRESHOLD}). "
+            f"Signals tried: {', '.join(best.signals)}. "
+            "Insufficient confidence to merge — draft created."
+        )
+    if dec.best is None:
+        return f"Routed to {dec.action} (delta={dec.delta_status})."
+
+    b = dec.best
+    action_verb = {
+        "AUTO_MATCH": "Auto-merged",
+        "REVIEW_QUEUE": "Queued for human review",
+    }.get(dec.action, dec.action)
+    return (
+        f"{action_verb} to GlobalSKU {b.global_sku_id} "
+        f"(confidence {b.confidence:.3f}, delta={dec.delta_status}). "
+        f"Match signals: {', '.join(b.signals)}. "
+        f"Global brand/category: {b.global_brand or '—'} / {b.global_category or '—'}."
+    )
+
+
+def _decision_to_row(row: dict, dec: Decision) -> TenantIngestRowResult:
+    pid = str(row.get("tenant_sku_id") or row.get("product_id", ""))
+    best = dec.best
+    return TenantIngestRowResult(
+        tenant_sku_id=pid,
+        product_id=str(row.get("product_id", pid)),
+        brand=str(row.get("brand", "")),
+        product_description=str(row.get("product_description", "")),
+        delta_status=dec.delta_status,
+        action=dec.action,
+        matched_global_sku=best.global_sku_id if best else None,
+        confidence=round(best.confidence, 4) if best else None,
+        match_signals=list(best.signals) if best else [],
+        reasoning=decision_reasoning(dec),
+    )
+
+
+def write_ingest_output_excel(
+    source_path: str,
+    results: list[TenantIngestRowResult],
+    output_path: str,
+) -> str:
+    """
+    Write tenant ingest results back to Excel with RKG outcome columns appended.
+    """
+    import pandas as pd
+
+    df = pd.read_excel(source_path, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+
+    by_pid: dict[str, TenantIngestRowResult] = {}
+    for r in results:
+        by_pid[r.product_id] = r
+        by_pid[r.tenant_sku_id] = r
+
+    pid_col = None
+    for cand in ("Product ID", "product_id"):
+        if cand in df.columns:
+            pid_col = cand
+            break
+    if pid_col is None:
+        raise ValueError("Excel must contain a 'Product ID' column")
+
+    out_cols = {
+        "RKG_Action": [],
+        "RKG_Delta_Status": [],
+        "RKG_Matched_Global_SKU": [],
+        "RKG_Confidence": [],
+        "RKG_Match_Signals": [],
+        "RKG_Reasoning": [],
+    }
+    for _, row in df.iterrows():
+        pid = str(row[pid_col]).strip()
+        res = by_pid.get(pid)
+        if res is None:
+            for v in out_cols.values():
+                v.append("")
+            continue
+        out_cols["RKG_Action"].append(res.action)
+        out_cols["RKG_Delta_Status"].append(res.delta_status)
+        out_cols["RKG_Matched_Global_SKU"].append(res.matched_global_sku or "")
+        out_cols["RKG_Confidence"].append(
+            f"{res.confidence:.4f}" if res.confidence is not None else ""
+        )
+        out_cols["RKG_Match_Signals"].append("|".join(res.match_signals))
+        out_cols["RKG_Reasoning"].append(res.reasoning)
+
+    for col, values in out_cols.items():
+        df[col] = values
+
+    df.to_excel(output_path, index=False)
+    return output_path
+
+
+def run_tenant_ingest(
+    tenant_file: str,
+    output_file: str | None = None,
+    skip_validation: bool = False,
+    write_graph: bool = True,
+) -> TenantIngestResult:
+    """
+    Process a tenant Excel file: normalize → match → merge/review/insert per row.
+
+    Used by ingest_vendor.py CLI and POST /tenant/ingest API.
+    """
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).isoformat()
+
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    decisions: list[Decision] = []
+    row_results: list[TenantIngestRowResult] = []
+    alerts: list[dict] = []
+    counts = {"total": 0, "AUTO_MATCH": 0, "REVIEW_QUEUE": 0,
+              "CREATE_NEW": 0, "UNCHANGED": 0, "alerts": 0}
+
+    with driver.session() as session:
+        if write_graph:
+            _ensure_schema(session)
+
+        df = normalize(tenant_file)
+        counts["total"] = len(df)
+
+        if write_graph:
+            classified, _ = detect_delta(session, df)
+        else:
+            classified = {str(r["product_id"]): "NEW" for _, r in df.iterrows()}
+
+        device = (
+            "mps" if torch.backends.mps.is_available() else
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        model = SentenceTransformer(EMBEDDING_MODEL, device=device)
+        embeddings = embed_rows(df, classified, model)
+
+        affected_skus: list[str] = []
+        for _, row in df.iterrows():
+            pid = str(row["product_id"])
+            status = classified.get(pid, "NEW")
+            rd = row.to_dict()
+
+            if status == "UNCHANGED":
+                counts["UNCHANGED"] += 1
+                dec = Decision(pid, "UNCHANGED", delta_status="UNCHANGED")
+                decisions.append(dec)
+                row_results.append(_decision_to_row(rd, dec))
+                continue
+
+            emb = embeddings.get(pid)
+            if emb is None:
+                counts["UNCHANGED"] += 1
+                dec = Decision(pid, "UNCHANGED", delta_status=status)
+                decisions.append(dec)
+                row_results.append(_decision_to_row(rd, dec))
+                continue
+
+            candidates = find_candidates(session, rd, emb) if write_graph else []
+            dec = route(candidates, status)
+            dec.product_id = pid
+
+            if write_graph:
+                if dec.action == "AUTO_MATCH":
+                    global_id = execute_auto_match(session, rd, emb, dec.best, run_id)
+                    affected_skus.append(global_id)
+                    counts["AUTO_MATCH"] += 1
+                elif dec.action == "REVIEW_QUEUE":
+                    execute_review_queue(session, rd, emb, dec.all_candidates, run_id)
+                    counts["REVIEW_QUEUE"] += 1
+                else:
+                    execute_create_new(session, rd, emb, run_id)
+                    counts["CREATE_NEW"] += 1
+            else:
+                counts[dec.action] = counts.get(dec.action, 0) + 1
+
+            decisions.append(dec)
+            row_results.append(_decision_to_row(rd, dec))
+
+        if write_graph and not skip_validation and affected_skus:
+            alerts = post_merge_validation(session, list(set(affected_skus)))
+            counts["alerts"] = len(alerts)
+
+        if write_graph:
+            _write_run_record(session, run_id, tenant_file, started_at, counts)
+
+    driver.close()
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    if output_file is None:
+        stem = tenant_file.rsplit(".", 1)[0]
+        output_file = f"{stem}_rkg_output.xlsx"
+
+    write_ingest_output_excel(tenant_file, row_results, output_file)
+
+    return TenantIngestResult(
+        run_id=run_id,
+        source_file=tenant_file,
+        output_file=output_file,
+        started_at=started_at,
+        completed_at=completed_at,
+        summary=counts,
+        rows=row_results,
+        alerts=alerts,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -997,118 +1248,40 @@ def main():
                         help="Skip post-merge anomaly validation (faster for large files)")
     args = parser.parse_args()
 
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    if args.review_queue or args.approve or args.reject or args.report:
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        with driver.session() as session:
+            _ensure_schema(session)
+            if args.review_queue:
+                show_review_queue(session)
+            elif args.approve:
+                approve_match(session, args.approve)
+            elif args.reject:
+                reject_match(session, args.reject)
+            elif args.report:
+                show_last_report(session)
+        driver.close()
+        return
 
-    with driver.session() as session:
-        _ensure_schema(session)
+    vendor_file = args.vendor_file
+    print(f"\n── Ingesting tenant file: {vendor_file} ───────────────────────")
 
-        # ── Read-only modes ──────────────────────────────────────────────────
-        if args.review_queue:
-            show_review_queue(session)
-            driver.close()
-            return
-
-        if args.approve:
-            approve_match(session, args.approve)
-            driver.close()
-            return
-
-        if args.reject:
-            reject_match(session, args.reject)
-            driver.close()
-            return
-
-        if args.report:
-            show_last_report(session)
-            driver.close()
-            return
-
-        # ── Ingestion run ────────────────────────────────────────────────────
-        vendor_file  = args.vendor_file
-        run_id       = str(uuid.uuid4())
-        started_at   = datetime.now(timezone.utc).isoformat()
-
-        print(f"\n── Ingesting: {vendor_file} ─────────────────────────────────────")
-        print(f"  run_id = {run_id[:8]}…")
-
-        # Step 1 — Normalize
-        print("\n── Step 1: Normalizing ──────────────────────────────────────────")
-        df = normalize(vendor_file)
-
-        # Step 2 — Delta detection
-        print("\n── Step 2: Delta detection ──────────────────────────────────────")
-        classified, _ = detect_delta(session, df)
-
-        # Step 3 — Embed new/updated rows
-        print("\n── Step 3: Embedding new/updated rows ───────────────────────────")
-        device = (
-            "mps"  if torch.backends.mps.is_available()  else
-            "cuda" if torch.cuda.is_available()           else
-            "cpu"
+    result = run_tenant_ingest(
+        vendor_file,
+        skip_validation=args.skip_validation,
+        write_graph=True,
+    )
+    decisions = [
+        Decision(
+            r.product_id, r.action,
+            best=Candidate(r.matched_global_sku or "", r.confidence or 0.0, r.match_signals)
+            if r.matched_global_sku and r.confidence is not None else None,
+            delta_status=r.delta_status,
         )
-        model      = SentenceTransformer(EMBEDDING_MODEL, device=device)
-        embeddings = embed_rows(df, classified, model)
-        print(f"  Embedded {len(embeddings):,} rows")
-
-        # Steps 4+5 — Match and route
-        print("\n── Steps 4–5: Matching and routing ──────────────────────────────")
-        decisions:      list[Decision] = []
-        affected_skus:  list[str]      = []
-        counts = {"total": len(df), "AUTO_MATCH": 0, "REVIEW_QUEUE": 0,
-                  "CREATE_NEW": 0, "UNCHANGED": 0}
-
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="  routing", unit="row"):
-            pid    = str(row["product_id"])
-            status = classified.get(pid, "NEW")
-            rd     = row.to_dict()
-
-            # UNCHANGED rows: update node properties only (no matching needed)
-            if status == "UNCHANGED":
-                counts["UNCHANGED"] += 1
-                decisions.append(Decision(pid, "UNCHANGED", delta_status="UNCHANGED"))
-                continue
-
-            emb = embeddings.get(pid)
-            if emb is None:
-                counts["UNCHANGED"] += 1
-                decisions.append(Decision(pid, "UNCHANGED", delta_status=status))
-                continue
-
-            candidates = find_candidates(session, rd, emb)
-            dec        = route(candidates, status)
-            dec.product_id = pid
-
-            if dec.action == "AUTO_MATCH":
-                global_id = execute_auto_match(session, rd, emb, dec.best, run_id)
-                affected_skus.append(global_id)
-                counts["AUTO_MATCH"] += 1
-
-            elif dec.action == "REVIEW_QUEUE":
-                execute_review_queue(session, rd, emb, dec.all_candidates, run_id)
-                counts["REVIEW_QUEUE"] += 1
-
-            else:  # CREATE_NEW
-                execute_create_new(session, rd, emb, run_id)
-                counts["CREATE_NEW"] += 1
-
-            decisions.append(dec)
-
-        # Step 6 — Post-merge validation
-        alerts: list[dict] = []
-        if not args.skip_validation and affected_skus:
-            print("\n── Step 6: Post-merge anomaly validation ────────────────────────")
-            alerts = post_merge_validation(session, list(set(affected_skus)))
-            counts["alerts"] = len(alerts)
-            if alerts:
-                print(f"  ⚠  {len(alerts)} GlobalSKUs flagged")
-            else:
-                print(f"  ✓  No anomaly spikes detected")
-
-        # Write run record
-        _write_run_record(session, run_id, vendor_file, started_at, counts)
-
-    driver.close()
-    print_ingest_report(decisions, alerts, vendor_file)
+        for r in result.rows
+    ]
+    print_ingest_report(decisions, result.alerts, vendor_file)
+    print(f"  Output Excel: {result.output_file}")
 
 
 if __name__ == "__main__":

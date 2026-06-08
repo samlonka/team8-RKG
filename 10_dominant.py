@@ -56,7 +56,7 @@ from config import (
 
 PK_MAP = {
     "GlobalSKU":     "sku_id",
-    "VendorSKU":     "product_id",
+    "TenantSKU":     "tenant_sku_id",
     "Brand":         "brand_id",
     "PackageType":   "package_type_id",
     "Manufacturer":  "name",
@@ -115,7 +115,7 @@ def fetch_subgraph(session, focus_label: str):
         RETURN labels(n)[0] AS lbl,
                CASE labels(n)[0]
                  WHEN 'GlobalSKU'     THEN n.sku_id
-                 WHEN 'VendorSKU'     THEN n.product_id
+                 WHEN 'TenantSKU'     THEN n.tenant_sku_id
                  WHEN 'Brand'         THEN n.brand_id
                  WHEN 'PackageType'   THEN n.package_type_id
                  WHEN 'Customer'      THEN n.customer_id
@@ -149,7 +149,7 @@ def fetch_subgraph(session, focus_label: str):
         RETURN f.{pk} AS fid, labels(n)[0] AS nl,
                CASE labels(n)[0]
                  WHEN 'GlobalSKU'     THEN n.sku_id
-                 WHEN 'VendorSKU'     THEN n.product_id
+                 WHEN 'TenantSKU'     THEN n.tenant_sku_id
                  WHEN 'Brand'         THEN n.brand_id
                  WHEN 'PackageType'   THEN n.package_type_id
                  WHEN 'Customer'      THEN n.customer_id
@@ -165,7 +165,7 @@ def fetch_subgraph(session, focus_label: str):
         RETURN f.{pk} AS fid, labels(n)[0] AS nl,
                CASE labels(n)[0]
                  WHEN 'GlobalSKU'     THEN n.sku_id
-                 WHEN 'VendorSKU'     THEN n.product_id
+                 WHEN 'TenantSKU'     THEN n.tenant_sku_id
                  WHEN 'Brand'         THEN n.brand_id
                  WHEN 'PackageType'   THEN n.package_type_id
                  WHEN 'Customer'      THEN n.customer_id
@@ -468,7 +468,7 @@ def print_top_anomalies(session, label: str, top_n: int):
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-BASE_LABELS = ["GlobalSKU", "VendorSKU", "Brand", "PackageType",
+BASE_LABELS = ["GlobalSKU", "TenantSKU", "Brand", "PackageType",
                "Manufacturer", "Supplier", "ProductClass"]
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 from neo4j import GraphDatabase
 
+from agents.entity_display import brand_display, sku_summary
 from agents.models import CandidateChain, EntityNode, QuerySpec, TaskList
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
@@ -100,11 +101,56 @@ class LifecycleDoer:
                 )
         return self._scores
 
-    def _node(self, eid, label, name, ts=None, score=None, source="cypher"):
+    def _sku_props(self, row: dict) -> dict:
+        return {
+            "brand_name":   row.get("brand_name") or row.get("brand"),
+            "brand_family": (
+                row.get("brand_family") or row.get("linked_brand") or row.get("brand")
+            ),
+            "package_type": row.get("package_type") or row.get("package"),
+        }
+
+    def _global_sku_node(self, row: dict, ts: str, score=None, detail: str = ""):
+        sku = str(row["sku"])
+        props = self._sku_props(row)
+        return EntityNode(
+            entity_id=sku,
+            label="GlobalSKU",
+            display_name=sku_summary(
+                sku,
+                props["brand_name"],
+                props["brand_family"],
+                props["package_type"],
+                detail=detail,
+            ),
+            properties=props,
+            anomaly_score=score,
+            timestamp=ts,
+            source="cypher",
+        )
+
+    def _sku_meta_map(self, sku_ids: list[str]) -> dict[str, dict]:
+        if not sku_ids:
+            return {}
+        rows = self.s.run(
+            """
+            UNWIND $ids AS sid
+            MATCH (g:GlobalSKU {sku_id: sid})
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type
+            """,
+            ids=sku_ids,
+        ).data()
+        return {str(r["sku"]): r for r in rows}
+
+    def _node(self, eid, label, name, ts=None, score=None, source="cypher", props=None):
         return EntityNode(
             entity_id=str(eid),
             label=label,
             display_name=name,
+            properties=props or {},
             anomaly_score=score,
             timestamp=ts,
             source=source,
@@ -116,8 +162,13 @@ class LifecycleDoer:
             MATCH (t:TenantSKU)-[:MAPS_TO]->(g:GlobalSKU {cohort:$c})-[:BELONGS_TO_BRAND]->(b:Brand)
             WHERE b.canonical = false
             OPTIONAL MATCH (p:Pallet)-[:SCANNED_ON]->(g) WHERE p.outcome='failure'
-            RETURN g.sku_id AS sku, b.brand_family AS brand,
-                   t.tenant_sku_id AS tenant, collect(DISTINCT p.pallet_id)[..1] AS pals
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type,
+                   b.brand_family AS brand,
+                   t.tenant_sku_id AS tenant,
+                   collect(DISTINCT p.pallet_id)[..1] AS pals
             """,
             c=COHORT,
         ).data()
@@ -136,12 +187,11 @@ class LifecycleDoer:
             )
         for r in rows:
             path.append(
-                self._node(
-                    r["sku"],
-                    "GlobalSKU",
-                    f"SKU {r['sku']}",
+                self._global_sku_node(
+                    r,
                     ts=TS_TRAIN,
                     score=sc.get(r["sku"]),
+                    detail=f"linked_brand={brand_display(r.get('brand'))}",
                 )
             )
         for pid in [p for r in rows for p in r["pals"]][:3]:
@@ -156,7 +206,11 @@ class LifecycleDoer:
             OPTIONAL MATCH (p:Pallet)-[:SCANNED_ON]->(g) WHERE p.outcome='failure'
             WITH g, count(DISTINCT img) AS imgs, collect(DISTINCT p.pallet_id) AS fails
             WHERE imgs = 0 AND size(fails) >= 2
-            RETURN g.sku_id AS sku, fails
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type,
+                   fails
             """,
             c=COHORT,
         ).data()
@@ -165,12 +219,11 @@ class LifecycleDoer:
         path = []
         for r in rows:
             path.append(
-                self._node(
-                    r["sku"],
-                    "GlobalSKU",
-                    f"SKU {r['sku']}: 0 training images + {len(r['fails'])} scan failures",
+                self._global_sku_node(
+                    r,
                     ts=TS_TRAIN,
                     score=sc.get(r["sku"]),
+                    detail=f"0 training images + {len(r['fails'])} scan failures",
                 )
             )
             for pid in r["fails"][:1]:
@@ -184,7 +237,12 @@ class LifecycleDoer:
             WITH g, collect(DISTINCT cust.customer_id) AS customers
             WHERE size(customers) > 1
             OPTIONAL MATCH (t:TenantSKU)-[:MAPS_TO]->(g)
-            RETURN g.sku_id AS sku, customers, collect(DISTINCT t.tenant_sku_id)[..4] AS tenants
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type,
+                   customers,
+                   collect(DISTINCT t.tenant_sku_id)[..4] AS tenants
             ORDER BY size(customers) DESC
             LIMIT 5
             """,
@@ -199,12 +257,11 @@ class LifecycleDoer:
         for cid in top["customers"][:4]:
             path.append(self._node(cid, "Customer", f"depends on SKU {top['sku']}", ts=TS_IMPORT))
         path.append(
-            self._node(
-                top["sku"],
-                "GlobalSKU",
-                f"SKU {top['sku']} — {len(top['customers'])} customers",
+            self._global_sku_node(
+                top,
                 ts=TS_TRAIN,
                 score=sc.get(top["sku"]),
+                detail=f"{len(top['customers'])} customers",
             )
         )
         for tid in top["tenants"][:3]:
@@ -220,7 +277,11 @@ class LifecycleDoer:
             WITH g, collect(DISTINCT t.tenant_sku_id) AS tenants,
                  collect(DISTINCT p.pallet_id) AS fails
             WHERE size(tenants) >= 1 AND size(fails) >= 2
-            RETURN g.sku_id AS sku, tenants, fails
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type,
+                   tenants, fails
             ORDER BY size(fails) DESC
             LIMIT 5
             """,
@@ -239,12 +300,11 @@ class LifecycleDoer:
                 )
             )
             path.append(
-                self._node(
-                    r["sku"],
-                    "GlobalSKU",
-                    f"SKU {r['sku']}: neighbourhood contradicts tenant record",
+                self._global_sku_node(
+                    r,
                     ts=TS_TRAIN,
                     score=sc.get(r["sku"]),
+                    detail="neighbourhood contradicts tenant record",
                 )
             )
             for pid in r["fails"][:2]:
@@ -262,7 +322,9 @@ class LifecycleDoer:
             OPTIONAL MATCH (p:Pallet)-[:SCANNED_ON]->(g) WHERE p.outcome = 'failure'
             OPTIONAL MATCH (g)-[:MERGED_INTO]->(m:MergeEvent)
             RETURN g.sku_id AS sku,
-                   g.brand_family AS brand,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type,
                    coalesce(g.planted_type, '') AS planted,
                    collect(DISTINCT t.tenant_sku_id)[..3] AS tenants,
                    b.brand_family AS linked_brand,
@@ -292,18 +354,23 @@ class LifecycleDoer:
                 path.append(
                     self._node(mid, "MergeEvent", "conflicted merge history", ts=TS_TRAIN)
                 )
-        brand_label = row["linked_brand"] or row["brand"] or "unknown brand"
+        brand_label = (
+            row["linked_brand"]
+            or row.get("brand_family")
+            or row.get("brand_name")
+            or "unknown brand"
+        )
         if row["canonical"] is False:
             brand_label += " (non-canonical)"
         path.append(
-            self._node(
-                row["sku"],
-                "GlobalSKU",
-                f"SKU {row['sku']}: {row['imgs']} training images, "
-                f"{len(row['fails'] or [])} scan failures"
-                + (f" [{row['planted']}]" if row["planted"] else ""),
+            self._global_sku_node(
+                row,
                 ts=TS_TRAIN,
                 score=sc.get(row["sku"]),
+                detail=(
+                    f"{row['imgs']} training images, {len(row['fails'] or [])} scan failures"
+                    + (f" [{row['planted']}]" if row["planted"] else "")
+                ),
             )
         )
         if row["linked_brand"]:
@@ -355,22 +422,34 @@ class LifecycleDoer:
     def risk_rank(self, n: int = 20) -> list[tuple[str, float]]:
         return sorted(self.scores().items(), key=lambda kv: kv[1], reverse=True)[:n]
 
+    def risk_rank_detailed(self, n: int = 20) -> list[dict]:
+        """Top-N at-risk SKUs with brand_name and package_type for demo logs."""
+        ranked = self.risk_rank(n)
+        meta = self._sku_meta_map([sku for sku, _ in ranked])
+        out = []
+        for sku, score in ranked:
+            row = meta.get(sku, {"sku": sku})
+            out.append({
+                "sku_id": sku,
+                "score": score,
+                "brand_name": row.get("brand_name"),
+                "brand_family": row.get("brand_family"),
+                "package_type": row.get("package_type"),
+            })
+        return out
+
     def risk_rank_chains(self, n: int = 20) -> list[CandidateChain]:
         chains = []
-        for i, (sku, score) in enumerate(self.risk_rank(n), 1):
+        ranked = self.risk_rank(n)
+        meta = self._sku_meta_map([sku for sku, _ in ranked])
+        for i, (sku, score) in enumerate(ranked, 1):
+            row = meta.get(sku, {"sku": sku})
+            node = self._global_sku_node(row, ts=TS_TRAIN, score=score)
+            node.source = "anomaly_rank"
             chains.append(
                 CandidateChain(
                     chain_id=f"rank{i:02d}",
-                    path=[
-                        self._node(
-                            sku,
-                            "GlobalSKU",
-                            f"SKU {sku}",
-                            ts=TS_TRAIN,
-                            score=score,
-                            source="anomaly_rank",
-                        )
-                    ],
+                    path=[node],
                     source="anomaly_rank",
                 )
             )
@@ -378,8 +457,15 @@ class LifecycleDoer:
 
     def closed_world_brand_dupes(self) -> list[dict]:
         return self.s.run(
-            "MATCH (g:GlobalSKU)-[:BELONGS_TO_BRAND]->(b:Brand) "
-            "WHERE b.flag = 'duplicate' RETURN g.sku_id AS sku LIMIT 20"
+            """
+            MATCH (g:GlobalSKU)-[:BELONGS_TO_BRAND]->(b:Brand)
+            WHERE b.flag = 'duplicate'
+            RETURN g.sku_id AS sku,
+                   g.brand_name AS brand_name,
+                   g.brand_family AS brand_family,
+                   g.package_category_name AS package_type
+            LIMIT 20
+            """
         ).data()
 
     def chain_for_scenario(self, scenario_num: int) -> list[CandidateChain]:

@@ -22,8 +22,11 @@ EMBEDDING_DIM   = 768
 
 # ── Data file paths ───────────────────────────────────────────────────────────
 # Place your source files in the data/ folder (or update these paths)
+# Master global catalog (handbook §2 — GlobalSKU / master SKU list)
 GLOBAL_SKU_CSV    = "data/vor_sku_data.csv"
-VENDOR_SKU_XLSX   = "data/SKU_Export.xlsx"
+# One tenant's product list at import (handbook §2 — TenantSKU); also used by 02_seed_data.py
+TENANT_SKU_XLSX   = "data/SKU_Export.xlsx"
+VENDOR_SKU_XLSX   = TENANT_SKU_XLSX   # backward-compatible alias
 
 # ── Relation-type weights ─────────────────────────────────────────────────────
 # Higher weight = this relationship type has stronger influence on reflect_emb.
@@ -128,7 +131,7 @@ DOMINANT_LR         = 1e-3
 MATCH_AUTO_THRESHOLD      = 0.90   # confidence ≥ this → auto-match, no review needed
 MATCH_REVIEW_THRESHOLD    = 0.65   # confidence ≥ this → human review queue
 #                                    confidence < MATCH_REVIEW_THRESHOLD → GlobalSKUDraft
-MATCH_ANN_TOP_K           = 10     # ANN candidates per VendorSKU
+MATCH_ANN_TOP_K           = 10     # ANN candidates per TenantSKU
 MATCH_ANOMALY_ALERT_DELTA = 0.10   # flag GlobalSKU if anomaly_attn rises by ≥ this after ingest
 
 # ── Bedrock LLM (all agents — Claude Opus 4.7, no heuristic fallback) ───────
@@ -141,8 +144,12 @@ EMBED_BATCH_SIZE = 64   # sentence-transformer batch size
 # ── Node labels (Neo4j) ───────────────────────────────────────────────────────
 NODE_LABELS = {
     "global_sku":    "GlobalSKU",
-    "vendor_sku":    "VendorSKU",
+    "tenant_sku":    "TenantSKU",
     "brand":         "Brand",
+    "customer":      "Customer",
+    "training_image": "TrainingImage",
+    "merge_event":   "MergeEvent",
+    "pallet":        "Pallet",
     "package_type":  "PackageType",
     "manufacturer":  "Manufacturer",
     "supplier":      "Supplier",

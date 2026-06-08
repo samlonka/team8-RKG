@@ -21,7 +21,7 @@ from agents.models import QuerySpec, QueryTask, TaskList
 # ── Neo4j vector index names (must match 01_schema.py) ───────────────────────
 SELF_INDEXES = {
     "GlobalSKU":    "idx_global_sku_self",
-    "VendorSKU":    "idx_vendor_sku_self",
+    "TenantSKU":    "idx_tenant_sku_self",
     "Brand":        "idx_brand_self",
     "PackageType":  "idx_package_self",
     "Manufacturer": "idx_mfr_self",
@@ -30,7 +30,7 @@ SELF_INDEXES = {
 }
 REFLECT_INDEXES = {
     "GlobalSKU":    "idx_global_sku_reflect",
-    "VendorSKU":    "idx_vendor_sku_reflect",
+    "TenantSKU":    "idx_tenant_sku_reflect",
     "Brand":        "idx_brand_reflect",
     "PackageType":  "idx_package_reflect",
     "Manufacturer": "idx_mfr_reflect",
@@ -40,25 +40,32 @@ REFLECT_INDEXES = {
 
 # ── Primary key per label ─────────────────────────────────────────────────────
 PK = {
-    "GlobalSKU":    "sku_id",
-    "VendorSKU":    "product_id",
-    "Brand":        "brand_id",
-    "PackageType":  "package_type_id",
-    "Manufacturer": "name",
-    "Supplier":     "name",
-    "ProductClass": "name",
+    "GlobalSKU":     "sku_id",
+    "TenantSKU":     "tenant_sku_id",
+    "Brand":         "brand_id",
+    "Customer":      "customer_id",
+    "PackageType":   "package_type_id",
+    "TrainingImage": "image_id",
+    "MergeEvent":    "merge_id",
+    "Pallet":        "pallet_id",
+    "Manufacturer":  "name",
+    "Supplier":      "name",
+    "ProductClass":  "name",
 }
 
-# ── Relationship paths used in Cypher templates ───────────────────────────────
-# Each entry is (from_label, rel_type, to_label)
+# ── Relationship paths (handbook §3.2) ───────────────────────────────────────
 GRAPH_PATHS = [
-    ("GlobalSKU", "BELONGS_TO_BRAND", "Brand"),
-    ("GlobalSKU", "HAS_PACKAGE",      "PackageType"),
-    ("GlobalSKU", "MADE_BY",          "Manufacturer"),
-    ("VendorSKU", "MAPS_TO",          "GlobalSKU"),
-    ("VendorSKU", "SUPPLIED_BY",      "Supplier"),
-    ("VendorSKU", "IN_CLASS",         "ProductClass"),
-    ("Brand",     "FUZZY_MATCH",      "Brand"),
+    ("TenantSKU",     "MAPS_TO",          "GlobalSKU"),
+    ("GlobalSKU",     "BELONGS_TO_BRAND", "Brand"),
+    ("GlobalSKU",     "HAS_PACKAGE",      "PackageType"),
+    ("GlobalSKU",     "MADE_BY",          "Manufacturer"),
+    ("GlobalSKU",     "USED_BY",          "Customer"),
+    ("GlobalSKU",     "MERGED_INTO",      "MergeEvent"),
+    ("TrainingImage", "TRAINED_WITH",     "GlobalSKU"),
+    ("Pallet",        "SCANNED_ON",       "GlobalSKU"),
+    ("Brand",         "FUZZY_MATCH",      "Brand"),
+    ("TenantSKU",     "SUPPLIED_BY",      "Supplier"),
+    ("TenantSKU",     "IN_CLASS",         "ProductClass"),
 ]
 
 
@@ -114,6 +121,37 @@ def _cypher_neighbourhood(anchor_label: str, anchor_id: str) -> str:
     """
 
 
+def _cypher_import_brand_chain() -> str:
+    """
+    Handbook §5 example traversal:
+    TenantSKU → MAPS_TO → GlobalSKU → BELONGS_TO_BRAND → Brand → FUZZY_MATCH
+    """
+    return """
+    MATCH (t:TenantSKU)-[:MAPS_TO]->(g:GlobalSKU)-[:BELONGS_TO_BRAND]->(b:Brand)
+    OPTIONAL MATCH (b)-[f:FUZZY_MATCH]->(b2:Brand)
+    OPTIONAL MATCH (img:TrainingImage)-[:TRAINED_WITH]->(g)
+    OPTIONAL MATCH (p:Pallet)-[:SCANNED_ON]->(g)
+    WITH t, g, b, count(DISTINCT f) AS fuzzy_count,
+         count(DISTINCT img) AS img_count,
+         sum(CASE WHEN p.outcome = 'failure' THEN 1 ELSE 0 END) AS scan_failures
+    WHERE fuzzy_count >= 1 OR b.canonical = false OR coalesce(b.canonical, true) = false
+    RETURN
+        t.tenant_sku_id                     AS related_id,
+        'TenantSKU'                         AS related_label,
+        g.sku_id                            AS sku_id,
+        b.brand_id                          AS brand_id,
+        ['MAPS_TO','BELONGS_TO_BRAND']      AS rel_types,
+        g.self_emb                          AS self_emb,
+        g.reflect_emb                       AS reflect_emb,
+        coalesce(t.creation_date, g.creation_date, '') AS timestamp,
+        fuzzy_count,
+        img_count,
+        scan_failures
+    ORDER BY fuzzy_count DESC, scan_failures DESC
+    LIMIT 200
+    """
+
+
 def _cypher_brand_fragmentation() -> str:
     """
     Scenario 1: Detect brands with high FUZZY_MATCH fan-out.
@@ -142,24 +180,24 @@ def _cypher_brand_fragmentation() -> str:
 def _cypher_multi_signal_risk() -> str:
     """
     Scenario 2: Cross-source weak signal aggregation.
-    Find GlobalSKUs that have: missing UPC + no VendorSKU mapping + review needed.
+    Find GlobalSKUs that have: missing UPC + no TenantSKU mapping + review needed.
     """
     return """
     MATCH (s:GlobalSKU)
     WHERE s.upc_missing = true
        OR s.is_review_needed = true
        OR s.is_imaged_on_training_station = false
-    OPTIONAL MATCH (v:VendorSKU)-[:MAPS_TO]->(s)
+    OPTIONAL MATCH (t:TenantSKU)-[:MAPS_TO]->(s)
     WITH s,
-         count(v) AS vendor_mappings,
+         count(t) AS tenant_mappings,
          s.upc_missing                         AS missing_upc,
          s.is_review_needed                    AS review_needed,
          NOT s.is_imaged_on_training_station   AS not_imaged
-    WITH s, vendor_mappings, missing_upc, review_needed, not_imaged,
+    WITH s, tenant_mappings, missing_upc, review_needed, not_imaged,
          (CASE WHEN missing_upc   THEN 1 ELSE 0 END +
           CASE WHEN review_needed THEN 1 ELSE 0 END +
           CASE WHEN not_imaged    THEN 1 ELSE 0 END +
-          CASE WHEN vendor_mappings = 0 THEN 1 ELSE 0 END) AS risk_signals
+          CASE WHEN tenant_mappings = 0 THEN 1 ELSE 0 END) AS risk_signals
     WHERE risk_signals >= 2
     RETURN
         s.sku_id              AS sku_id,
@@ -169,7 +207,7 @@ def _cypher_multi_signal_risk() -> str:
         missing_upc,
         review_needed,
         not_imaged,
-        vendor_mappings,
+        tenant_mappings,
         s.self_emb            AS self_emb,
         s.reflect_emb         AS reflect_emb,
         s.creation_date       AS timestamp
@@ -186,7 +224,7 @@ def _cypher_anomaly_rank(label: str, top_n: int = 20) -> str:
     pk = PK.get(label, "sku_id")
     display = {
         "GlobalSKU": "coalesce(n.brand_family, n.sku_id)",
-        "VendorSKU": "coalesce(n.brand, n.product_id)",
+        "TenantSKU": "coalesce(n.brand, n.tenant_sku_id)",
         "Brand":     "n.brand_family",
     }.get(label, "n.name")
     return f"""
@@ -250,8 +288,21 @@ class PlannerAgent:
 
         step = 1
 
-        # Special case: brand fragmentation pattern (Scenario 1)
-        if not anchor_id and "Brand" in spec.entity_types:
+        # Handbook import → brand mismatch chain (TenantSKU → Brand → FUZZY_MATCH)
+        if not anchor_id and (
+            "Brand" in spec.entity_types
+            or "TenantSKU" in spec.entity_types
+            or "Customer" in spec.entity_types
+        ):
+            tl.tasks.append(QueryTask(
+                step=step,
+                task_type="cypher_traverse",
+                label="TenantSKU",
+                description="Import chain: TenantSKU → GlobalSKU → Brand → FUZZY_MATCH",
+                cypher=_cypher_import_brand_chain(),
+                cypher_params={},
+            ))
+            step += 1
             tl.tasks.append(QueryTask(
                 step=step,
                 task_type="cypher_traverse",

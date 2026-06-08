@@ -34,4 +34,6 @@ htmlcov/
 .mypy_cache/
 .pytype/
 .pyre/
-.pytype/
+
+# Async tenant ingest API uploads and outputs
+data/ingest_jobs/

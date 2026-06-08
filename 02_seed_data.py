@@ -3,7 +3,7 @@
 
 Pipeline:
   1. Load & normalize Global SKU CSV
-  2. Load & normalize Vendor SKU XLSX
+  2. Load TenantSKU list from tenant Excel (data/SKU_Export.xlsx)
   3. Derive Brand, PackageType, Manufacturer, Supplier, ProductClass nodes
   4. Insert all nodes into Neo4j (MERGE — idempotent)
   5. Create all relationships (MAPS_TO via UPC, BELONGS_TO_BRAND, etc.)
@@ -25,7 +25,7 @@ from sentence_transformers import SentenceTransformer
 
 from config import (
     NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-    GLOBAL_SKU_CSV, VENDOR_SKU_XLSX,
+    GLOBAL_SKU_CSV, TENANT_SKU_XLSX,
     EMBEDDING_MODEL, EMBED_BATCH_SIZE,
     BRAND_FUZZY_TOP_K, BRAND_FUZZY_MIN_SIM,
     GLOBAL_SKU_FIELDS, VENDOR_SKU_FIELDS,
@@ -33,6 +33,7 @@ from config import (
 from data.master_loader import (
     enrich_global_dataframe,
     build_global_upc_lookup,
+    match_tenant_to_global,
     match_vendor_to_global,
     normalize_upc,
 )
@@ -109,9 +110,17 @@ def load_global_sku(path: str) -> pd.DataFrame:
     return df
 
 
+def load_tenant_sku_excel(path: str) -> pd.DataFrame:
+    """
+    Load one tenant's SKU list from Excel (handbook TenantSKU — Stage 1 Import).
+    Maps to GlobalSKU via UPC during relationship creation.
+    """
+    return load_vendor_sku(path)
+
+
 def load_vendor_sku(path: str) -> pd.DataFrame:
     """
-    Load Vendor SKU XLSX and normalize fields.
+    Load tenant SKU XLSX and normalize fields.
 
     Key normalizations:
     - Column rename via VENDOR_SKU_FIELDS map
@@ -130,6 +139,9 @@ def load_vendor_sku(path: str) -> pd.DataFrame:
     df = df.dropna(subset=["product_id"])
     df["product_id"] = df["product_id"].str.strip()
     df = df.drop_duplicates(subset=["product_id"], keep="first")
+    df["tenant_sku_id"] = df["product_id"].astype(str)
+    df["match_method"] = "fuzzy"
+    df["customer"] = df.get("warehouse", "VENDOR_IMPORT").fillna("VENDOR_IMPORT")
 
     # Text fields — uppercase, strip
     for col in ["brand", "supplier", "product_class", "product_description", "warehouse"]:
@@ -172,11 +184,12 @@ def load_vendor_sku(path: str) -> pd.DataFrame:
     pkg_info = df["product_description"].apply(parse_package).apply(pd.Series)
     df = pd.concat([df, pkg_info], axis=1)
 
-    print(f"  Vendor SKU loaded: {len(df):,} rows | "
+    print(f"  TenantSKU (Excel) loaded: {len(df):,} rows | "
           f"{df['brand'].nunique()} brands | "
           f"{df['supplier'].nunique()} suppliers | "
           f"{df['product_class'].nunique()} product classes")
     return df
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -209,22 +222,27 @@ def global_sku_to_text(row) -> str:
     )
 
 
-def vendor_sku_to_text(row) -> str:
+def tenant_sku_to_text(row) -> str:
     """
-    Build embedding text for Vendor SKU.
-    Package info extracted from description is included as structured fields.
+    Build embedding text for TenantSKU (handbook — customer-specific product record).
     """
     container = row.get("pkg_container", "") or "unknown"
     return (
-        f"vendor SKU "
+        f"tenant SKU "
+        f"customer {row.get('customer', 'unknown')} "
         f"brand {row.get('brand', 'unknown')} "
         f"supplier {row.get('supplier', 'unknown')} "
         f"class {row.get('product_class', 'unknown')} "
-        f"units per case {int(row.get('units_per_case', 0))} "
+        f"match {row.get('match_method', 'exact')} "
+        f"units per case {int(row.get('units_per_case', 0) or 0)} "
         f"size {row.get('pkg_size', 0)}{row.get('pkg_unit', '')} "
         f"container {container} "
-        f"warehouse {row.get('warehouse', 'unknown')}"
+        f"description {row.get('product_description', 'unknown')}"
     )
+
+
+# Backward-compatible alias for incremental XLSX ingest
+vendor_sku_to_text = tenant_sku_to_text
 
 
 def brand_to_text(brand_family: str) -> str:
@@ -349,44 +367,48 @@ def seed_global_skus(session, df: pd.DataFrame, model: SentenceTransformer):
     print(f"    → {len(rows):,} GlobalSKU nodes written")
 
 
-def seed_vendor_skus(session, df: pd.DataFrame, model: SentenceTransformer):
-    print("  Seeding VendorSKU nodes ...")
-    texts = [vendor_sku_to_text(row) for _, row in df.iterrows()]
+def seed_tenant_skus(session, df: pd.DataFrame, model: SentenceTransformer):
+    print("  Seeding TenantSKU nodes ...")
+    texts = [tenant_sku_to_text(row) for _, row in df.iterrows()]
     embeddings = embed_texts(texts, model)
 
     rows = []
     for i, (_, row) in enumerate(df.iterrows()):
         rows.append({
-            "product_id":       str(row["product_id"]),
+            "tenant_sku_id":     str(row["tenant_sku_id"]),
             "product_description": row.get("product_description", ""),
-            "brand":            row.get("brand", ""),
-            "supplier":         row.get("supplier", ""),
-            "product_class":    row.get("product_class", ""),
-            "warehouse":        row.get("warehouse", ""),
-            "units_per_case":   float(row.get("units_per_case", 0)),
-            "unit_weight":      float(row.get("unit_weight", 0)),
-            "case_length":      float(row.get("case_length", 0)),
-            "case_width":       float(row.get("case_width", 0)),
-            "case_height":      float(row.get("case_height", 0)),
-            "case_upc":         row.get("case_upc"),
-            "retail_upc":       row.get("retail_upc"),
-            "eaches_upc":       row.get("eaches_upc"),
-            "pkg_qty":          int(row.get("pkg_qty", 0)),
-            "pkg_size":         float(row.get("pkg_size", 0)),
-            "pkg_unit":         row.get("pkg_unit", ""),
-            "pkg_container":    row.get("pkg_container", ""),
-            "self_emb":         embeddings[i].tolist(),
+            "brand":             row.get("brand", ""),
+            "supplier":          row.get("supplier", ""),
+            "product_class":     row.get("product_class", ""),
+            "warehouse":         row.get("warehouse", row.get("customer", "")),
+            "match_method":      row.get("match_method", "exact"),
+            "creation_date":     row.get("creation_date", ""),
+            "units_per_case":    float(row.get("units_per_case", 0) or 0),
+            "unit_weight":       float(row.get("unit_weight", 0) or 0),
+            "case_length":       float(row.get("case_length", 0) or 0),
+            "case_width":        float(row.get("case_width", 0) or 0),
+            "case_height":       float(row.get("case_height", 0) or 0),
+            "case_upc":          row.get("case_upc"),
+            "retail_upc":        row.get("retail_upc"),
+            "eaches_upc":        row.get("eaches_upc"),
+            "pkg_qty":           int(row.get("pkg_qty", 0) or 0),
+            "pkg_size":          float(row.get("pkg_size", 0) or 0),
+            "pkg_unit":          row.get("pkg_unit", ""),
+            "pkg_container":     row.get("pkg_container", ""),
+            "self_emb":          embeddings[i].tolist(),
         })
 
     cypher = """
     UNWIND $rows AS r
-    MERGE (v:VendorSKU {product_id: r.product_id})
-    SET v += {
+    MERGE (t:TenantSKU {tenant_sku_id: r.tenant_sku_id})
+    SET t += {
         product_description: r.product_description,
         brand:               r.brand,
         supplier:            r.supplier,
         product_class:       r.product_class,
         warehouse:           r.warehouse,
+        match_method:        r.match_method,
+        creation_date:       r.creation_date,
         units_per_case:      r.units_per_case,
         unit_weight:         r.unit_weight,
         case_length:         r.case_length,
@@ -403,7 +425,11 @@ def seed_vendor_skus(session, df: pd.DataFrame, model: SentenceTransformer):
     }
     """
     run_batch(session, cypher, rows)
-    print(f"    → {len(rows):,} VendorSKU nodes written")
+    print(f"    → {len(rows):,} TenantSKU nodes written")
+
+
+# Backward-compatible alias
+seed_vendor_skus = seed_tenant_skus
 
 
 def seed_brands(session, df_global: pd.DataFrame, model: SentenceTransformer):
@@ -496,6 +522,26 @@ def seed_manufacturers(session, df_global: pd.DataFrame, model: SentenceTransfor
     """
     run_batch(session, cypher, rows)
     print(f"    → {len(rows):,} Manufacturer nodes written")
+
+
+def seed_customers(session, df_tenant: pd.DataFrame, model: SentenceTransformer):
+    """Customer nodes from tenant warehouse column (handbook §3.1)."""
+    print("  Seeding Customer nodes ...")
+    col = "warehouse" if "warehouse" in df_tenant.columns else "customer"
+    customers = sorted(df_tenant[col].dropna().unique().tolist())
+    texts = [f"customer warehouse {c}" for c in customers]
+    embeddings = embed_texts(texts, model)
+    rows = [
+        {"customer_id": customers[i], "name": customers[i], "self_emb": embeddings[i].tolist()}
+        for i in range(len(customers))
+    ]
+    cypher = """
+    UNWIND $rows AS r
+    MERGE (c:Customer {customer_id: r.customer_id})
+    SET c.name = r.name, c.self_emb = r.self_emb
+    """
+    run_batch(session, cypher, rows)
+    print(f"    → {len(rows):,} Customer nodes written")
 
 
 def seed_suppliers(session, df_vendor: pd.DataFrame, model: SentenceTransformer):
@@ -598,68 +644,93 @@ def create_made_by(session, df_global: pd.DataFrame):
     print(f"    → {len(rows):,} MADE_BY edges")
 
 
-def create_maps_to(session, df_global: pd.DataFrame, df_vendor: pd.DataFrame):
+def create_maps_to(session, df_global: pd.DataFrame, df_tenant: pd.DataFrame):
     """
-    VendorSKU -[:MAPS_TO]-> GlobalSKU via retail/case/eaches UPC match
-    against all master UPC fields (upc, each_upc, case_upc, unit_upc, package_upc).
+    TenantSKU -[:MAPS_TO]-> GlobalSKU.
+
+    Master-derived tenants (vor_sku_data.csv) map directly by sku_id.
+    XLSX-ingested tenants fall back to multi-UPC join when sku_id is absent.
     """
-    print("  Creating MAPS_TO relationships (multi-UPC join) ...")
+    print("  Creating MAPS_TO relationships ...")
 
     upc_lookup = build_global_upc_lookup(df_global)
-
     rows = []
-    for _, r in df_vendor.iterrows():
-        pid = str(r["product_id"])
-        matched_sku, method = match_vendor_to_global(r.to_dict(), upc_lookup)
+    for _, r in df_tenant.iterrows():
+        tid = str(r["tenant_sku_id"])
+        matched_sku, method = match_tenant_to_global(r.to_dict(), upc_lookup)
         if matched_sku:
             rows.append({
-                "product_id":   pid,
-                "sku_id":       matched_sku,
-                "match_method": method,
+                "tenant_sku_id": tid,
+                "sku_id":        matched_sku,
+                "match_method":  method or r.get("match_method", "exact"),
             })
 
     cypher = """
     UNWIND $rows AS r
-    MATCH (v:VendorSKU {product_id: r.product_id})
-    MATCH (g:GlobalSKU {sku_id:     r.sku_id})
-    MERGE (v)-[e:MAPS_TO]->(g)
+    MATCH (t:TenantSKU {tenant_sku_id: r.tenant_sku_id})
+    MATCH (g:GlobalSKU {sku_id: r.sku_id})
+    MERGE (t)-[e:MAPS_TO]->(g)
     SET e.match_method = r.match_method
     """
     run_batch(session, cypher, rows)
-    print(f"    → {len(rows):,} MAPS_TO edges ({len(rows)} vendor SKUs matched to global)")
+    print(f"    → {len(rows):,} MAPS_TO edges (TenantSKU → GlobalSKU)")
 
 
-def create_supplied_by(session, df_vendor: pd.DataFrame):
-    """VendorSKU -[:SUPPLIED_BY]-> Supplier"""
+def create_tenant_used_by(session):
+    """
+    GlobalSKU -[:USED_BY]-> Customer via TenantSKU warehouse (handbook §3.2).
+    Requires MAPS_TO edges to exist first.
+    """
+    print("  Creating USED_BY relationships (shared-SKU boundary) ...")
+    result = session.run(
+        """
+        MATCH (t:TenantSKU)-[:MAPS_TO]->(g:GlobalSKU)
+        WHERE t.warehouse IS NOT NULL AND t.warehouse <> 'UNKNOWN'
+        MATCH (c:Customer {customer_id: t.warehouse})
+        MERGE (g)-[:USED_BY]->(c)
+        RETURN count(*) AS n
+        """
+    ).single()
+    print(f"    → {result['n']:,} USED_BY edges")
+
+
+def _tenant_id(row) -> str:
+    if "tenant_sku_id" in row.index and pd.notna(row.get("tenant_sku_id")):
+        return str(row["tenant_sku_id"])
+    return str(row["product_id"])
+
+
+def create_supplied_by(session, df_tenant: pd.DataFrame):
+    """TenantSKU -[:SUPPLIED_BY]-> Supplier"""
     print("  Creating SUPPLIED_BY relationships ...")
     rows = [
-        {"product_id": str(r["product_id"]), "supplier": r["supplier"]}
-        for _, r in df_vendor.iterrows()
+        {"tenant_sku_id": _tenant_id(r), "supplier": r["supplier"]}
+        for _, r in df_tenant.iterrows()
         if r.get("supplier", "UNKNOWN") != "UNKNOWN"
     ]
     cypher = """
     UNWIND $rows AS r
-    MATCH (v:VendorSKU {product_id: r.product_id})
+    MATCH (t:TenantSKU {tenant_sku_id: r.tenant_sku_id})
     MATCH (s:Supplier  {name: r.supplier})
-    MERGE (v)-[:SUPPLIED_BY]->(s)
+    MERGE (t)-[:SUPPLIED_BY]->(s)
     """
     run_batch(session, cypher, rows)
     print(f"    → {len(rows):,} SUPPLIED_BY edges")
 
 
-def create_in_class(session, df_vendor: pd.DataFrame):
-    """VendorSKU -[:IN_CLASS]-> ProductClass"""
+def create_in_class(session, df_tenant: pd.DataFrame):
+    """TenantSKU -[:IN_CLASS]-> ProductClass"""
     print("  Creating IN_CLASS relationships ...")
     rows = [
-        {"product_id": str(r["product_id"]), "product_class": r["product_class"]}
-        for _, r in df_vendor.iterrows()
+        {"tenant_sku_id": _tenant_id(r), "product_class": r["product_class"]}
+        for _, r in df_tenant.iterrows()
         if r.get("product_class", "UNKNOWN") != "UNKNOWN"
     ]
     cypher = """
     UNWIND $rows AS r
-    MATCH (v:VendorSKU   {product_id: r.product_id})
+    MATCH (t:TenantSKU   {tenant_sku_id: r.tenant_sku_id})
     MATCH (c:ProductClass {name: r.product_class})
-    MERGE (v)-[:IN_CLASS]->(c)
+    MERGE (t)-[:IN_CLASS]->(c)
     """
     run_batch(session, cypher, rows)
     print(f"    → {len(rows):,} IN_CLASS edges")
@@ -763,7 +834,11 @@ def main():
 
     print("\n── Loading source data ──────────────────────────────────────")
     df_global = load_global_sku(GLOBAL_SKU_CSV)
-    df_vendor = load_vendor_sku(VENDOR_SKU_XLSX)
+    from pathlib import Path
+    has_tenant = Path(TENANT_SKU_XLSX).exists()
+    df_tenant = load_tenant_sku_excel(TENANT_SKU_XLSX) if has_tenant else None
+    if not has_tenant:
+        print(f"  WARN: {TENANT_SKU_XLSX} not found — seeding GlobalSKU master catalog only.")
 
     print("\n── Connecting to Neo4j ──────────────────────────────────────")
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
@@ -772,33 +847,38 @@ def main():
         # ── Nodes ─────────────────────────────────────────────────────────
         print("\n── Seeding nodes ────────────────────────────────────────────")
         seed_global_skus(session, df_global, model)
-        seed_vendor_skus(session, df_vendor, model)
+        if df_tenant is not None:
+            seed_tenant_skus(session, df_tenant, model)
+            seed_customers(session, df_tenant, model)
         seed_brands(session, df_global, model)
         seed_package_types(session, df_global, model)
         seed_manufacturers(session, df_global, model)
-        seed_suppliers(session, df_vendor, model)
-        seed_product_classes(session, df_vendor, model)
+        if df_tenant is not None:
+            seed_suppliers(session, df_tenant, model)
+            seed_product_classes(session, df_tenant, model)
 
         # ── Relationships ──────────────────────────────────────────────────
         print("\n── Creating relationships ────────────────────────────────────")
         create_belongs_to_brand(session, df_global)
         create_has_package(session, df_global)
         create_made_by(session, df_global)
-        create_maps_to(session, df_global, df_vendor)
-        create_supplied_by(session, df_vendor)
-        create_in_class(session, df_vendor)
+        if df_tenant is not None:
+            create_maps_to(session, df_global, df_tenant)
+            create_tenant_used_by(session)
+            create_supplied_by(session, df_tenant)
+            create_in_class(session, df_tenant)
         create_fuzzy_brand_matches(session, model, df_global)
 
         # ── Summary ────────────────────────────────────────────────────────
         print("\n── Node counts ──────────────────────────────────────────────")
-        for label in ["GlobalSKU", "VendorSKU", "Brand", "PackageType",
+        for label in ["GlobalSKU", "TenantSKU", "Customer", "Brand", "PackageType",
                        "Manufacturer", "Supplier", "ProductClass"]:
             count = session.run(f"MATCH (n:{label}) RETURN count(n) AS c").single()["c"]
             print(f"  {label}: {count:,}")
 
         print("\n── Relationship counts ───────────────────────────────────────")
         for rel in ["BELONGS_TO_BRAND", "HAS_PACKAGE", "MADE_BY",
-                    "MAPS_TO", "SUPPLIED_BY", "IN_CLASS", "FUZZY_MATCH"]:
+                    "MAPS_TO", "USED_BY", "SUPPLIED_BY", "IN_CLASS", "FUZZY_MATCH"]:
             count = session.run(f"MATCH ()-[r:{rel}]->() RETURN count(r) AS c").single()["c"]
             print(f"  {rel}: {count:,}")
 

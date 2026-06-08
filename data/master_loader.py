@@ -142,12 +142,20 @@ def _upc_lookup_variants(digits: str) -> list[str]:
     return variants
 
 
+def match_tenant_to_global(
+    tenant_row: dict,
+    upc_lookup: dict[str, tuple[str, str]],
+) -> tuple[str | None, str | None]:
+    """Alias for UPC-based TenantSKU → GlobalSKU resolution."""
+    return match_vendor_to_global(tenant_row, upc_lookup)
+
+
 def match_vendor_to_global(
     vendor_row: dict,
     upc_lookup: dict[str, tuple[str, str]],
 ) -> tuple[str | None, str | None]:
     """
-    Try vendor retail_upc, case_upc, eaches_upc against master lookup.
+    Try tenant retail_upc, case_upc, eaches_upc against master lookup.
     Returns (sku_id, match_method) or (None, None).
     """
     checks = [

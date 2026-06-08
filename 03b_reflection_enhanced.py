@@ -36,7 +36,7 @@ from config import (
 from score_log import log_batch_run, ensure_indexes as ensure_score_log_indexes
 
 ALL_LABELS = [
-    "GlobalSKU", "VendorSKU", "Brand", "PackageType",
+    "GlobalSKU", "TenantSKU", "Brand", "PackageType",
     "Manufacturer", "Supplier", "ProductClass",
 ]
 
@@ -44,7 +44,7 @@ ALL_LABELS = [
 def _pk(label: str) -> str:
     return {
         "GlobalSKU":     "sku_id",
-        "VendorSKU":     "product_id",
+        "TenantSKU":     "tenant_sku_id",
         "Brand":         "brand_id",
         "PackageType":   "package_type_id",
         "Manufacturer":  "name",

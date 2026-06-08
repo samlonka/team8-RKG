@@ -19,8 +19,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from config import GLOBAL_SKU_CSV
 from data.master_loader import load_master_sku_records
@@ -34,7 +35,7 @@ UPDATE_THRESHOLD = 0.60   # ≥ this → updated (partial match)
                           # < UPDATE_THRESHOLD → insert
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="SKU Matching API", version="1.0.0")
+app = FastAPI(title="Reflexive KG API", version="2.0.0")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,6 +403,31 @@ class MatchedSKU(BaseModel):
     confidence:           float
 
 
+class QueryRequest(BaseModel):
+    """Handbook §5 — natural-language investigation question."""
+    question:   str = Field(..., min_length=3, description="Plain-English SKU lifecycle question")
+    anchor_sku: str | None = Field(None, description="Optional GlobalSKU sku_id to anchor root-cause trace")
+
+
+class QueryResponse(BaseModel):
+    question:            str
+    latency_seconds:     float
+    summary:             str
+    best_confidence:     float | None = None
+    best_classification: str | None = None
+    best_reasoning:      str | None = None
+    planner_rationale:   str = ""
+    validated_chains:    list[dict] = []
+    spec:                dict = {}
+    tasks:               list[dict] = []
+
+
+class IngestJobResponse(BaseModel):
+    job_id:     str
+    status:     str
+    message:    str
+
+
 class MatchResponse(BaseModel):
     status:       str          # merged | updated | insert
     confidence:   float
@@ -450,6 +476,107 @@ def match_endpoint(req: MatchRequest):
         query_dims=query_dims,
     )
     return result
+
+
+@app.post("/query/ask", response_model=QueryResponse)
+def query_ask_endpoint(req: QueryRequest):
+    """
+    **API 1 — Natural-language agent query (handbook §5).**
+
+    Runs: Supervisor → Planner → Doer → Critic on the reflexive knowledge graph.
+
+    Example questions:
+    - "Why did model accuracy degrade after the recent customer import?"
+    - "Which SKUs have multiple weak risk signals before training?"
+    - "Rank all GlobalSKUs by risk of causing training failures."
+    """
+    try:
+        from api.query_service import run_nl_query
+        payload = run_nl_query(req.question, anchor_sku=req.anchor_sku)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return QueryResponse(
+        question=payload["question"],
+        latency_seconds=payload["latency_seconds"],
+        summary=payload["summary"],
+        best_confidence=payload.get("best_confidence"),
+        best_classification=payload.get("best_classification"),
+        best_reasoning=payload.get("best_reasoning"),
+        planner_rationale=payload.get("planner_rationale", ""),
+        validated_chains=payload.get("validated_chains", []),
+        spec=payload.get("spec", {}),
+        tasks=payload.get("tasks", []),
+    )
+
+
+@app.post("/tenant/ingest", response_model=IngestJobResponse)
+async def tenant_ingest_endpoint(
+    file: UploadFile = File(..., description="Tenant SKU Excel (SKU_Export.xlsx format)"),
+    skip_validation: bool = False,
+):
+    """
+    **API 2 — Async tenant Excel ingest.**
+
+    Per row: normalize brand/package/UPC metadata → match against GlobalSKU master
+    (vor_sku_data.csv graph) → **AUTO_MATCH** (merge), **REVIEW_QUEUE**, or **CREATE_NEW**.
+
+    Poll ``GET /tenant/ingest/{job_id}`` until ``status`` is ``completed`` or ``failed``.
+    Download annotated Excel via ``GET /tenant/ingest/{job_id}/download``.
+    """
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=422, detail="Upload must be an Excel file (.xlsx)")
+
+    from api.ingest_jobs import save_upload_and_create_job, start_job_async
+
+    suffix = Path(file.filename).suffix or ".xlsx"
+    job = save_upload_and_create_job(await file.read(), suffix=suffix)
+    start_job_async(job.job_id, skip_validation=skip_validation)
+
+    return IngestJobResponse(
+        job_id=job.job_id,
+        status="pending",
+        message=(
+            "Tenant ingest started. Poll GET /tenant/ingest/{job_id} for status; "
+            "download results when completed."
+        ),
+    )
+
+
+@app.get("/tenant/ingest/{job_id}")
+def tenant_ingest_status(job_id: str):
+    """Poll async tenant ingest job status and per-row reasoning."""
+    from api.ingest_jobs import get_job, job_to_response
+
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return job_to_response(job)
+
+
+@app.get("/tenant/ingest/{job_id}/download")
+def tenant_ingest_download(job_id: str):
+    """Download the output Excel with RKG_Action / RKG_Reasoning columns appended."""
+    from api.ingest_jobs import get_job
+
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if job.status != "completed" or not job.output_path:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job status is '{job.status}'; output not ready",
+        )
+    path = Path(job.output_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Output file missing on disk")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=path.name,
+    )
 
 
 @app.post("/match/agent")
@@ -502,11 +629,19 @@ def health():
 @app.get("/")
 def root():
     return {
-        "message": "SKU Matching API",
+        "message": "Reflexive KG API",
+        "data_sources": {
+            "master_global_skus": "data/vor_sku_data.csv",
+            "seed_tenant_list":   "data/SKU_Export.xlsx",
+        },
         "endpoints": {
-            "POST /match":       "String-matching (fast, no Neo4j required)",
-            "POST /match/agent": "Agent + Reflexive KG (embeddings + graph signals + anomaly health)",
-            "GET  /health":      "Health check",
-            "GET  /docs":        "Interactive Swagger UI",
+            "POST /query/ask":              "NL question → Supervisor → Planner → Doer → Critic",
+            "POST /tenant/ingest":          "Upload tenant Excel → async merge/review/insert",
+            "GET  /tenant/ingest/{job_id}": "Poll ingest job status + per-row reasoning",
+            "GET  /tenant/ingest/{job_id}/download": "Download annotated output Excel",
+            "POST /match":                  "String-matching (fast, no Neo4j required)",
+            "POST /match/agent":            "Single SKU agent match (brand + package)",
+            "GET  /health":                 "Health check",
+            "GET  /docs":                   "Interactive Swagger UI",
         },
     }

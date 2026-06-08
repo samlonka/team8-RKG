@@ -57,14 +57,14 @@ from config import (
 )
 
 ALL_LABELS = [
-    "GlobalSKU", "VendorSKU", "Brand", "PackageType",
+    "GlobalSKU", "TenantSKU", "Brand", "PackageType",
     "Manufacturer", "Supplier", "ProductClass",
     "Customer", "TenantSKU", "TrainingImage", "MergeEvent", "Pallet",
 ]
 
 PK_MAP = {
     "GlobalSKU":     "sku_id",
-    "VendorSKU":     "product_id",
+    "TenantSKU":     "tenant_sku_id",
     "Brand":         "brand_id",
     "PackageType":   "package_type_id",
     "Manufacturer":  "name",
@@ -152,7 +152,7 @@ def fetch_graph(session) -> tuple[dict, torch.Tensor, torch.Tensor, torch.Tensor
                 RETURN $lbl AS al, a.{pk} AS aid, labels(b)[0] AS bl, type(r) AS rel,
                        CASE labels(b)[0]
                          WHEN 'GlobalSKU'    THEN b.sku_id
-                         WHEN 'VendorSKU'    THEN b.product_id
+                         WHEN 'TenantSKU'    THEN b.tenant_sku_id
                          WHEN 'Brand'        THEN b.brand_id
                          WHEN 'PackageType'  THEN b.package_type_id
                          WHEN 'Customer'     THEN b.customer_id
@@ -364,7 +364,7 @@ def main():
     )
 
     write_labels = (
-        ["GlobalSKU", "VendorSKU", "Brand", "PackageType",
+        ["GlobalSKU", "TenantSKU", "Brand", "PackageType",
          "Manufacturer", "Supplier", "ProductClass"]
         if args.label == "ALL" else [args.label]
     )

@@ -20,15 +20,16 @@ from neo4j import GraphDatabase
 
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from agents.critic import CriticAgent
-from agents.llm import LLMError, get_llm
+from agents.llm import LLMError, probe_bedrock
 from agents.models import CandidateChain, EntityNode
 
 scen = importlib.import_module("07_agent_scenarios")
 
 
 def _require_bedrock():
+    """Skip LLM-only tests when AWS/Bedrock is not configured."""
     try:
-        get_llm()
+        probe_bedrock()
     except LLMError as e:
         pytest.skip(str(e))
 
@@ -45,7 +46,6 @@ def test_supervisor_parse():
 
 
 def test_scenario1_brand_mismatch_validated():       # criterion #6
-    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).brand_mismatch_chain()
@@ -58,7 +58,6 @@ def test_scenario1_brand_mismatch_validated():       # criterion #6
 
 
 def test_scenario2_multi_signal():                   # criterion #7
-    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).multi_signal_chain()
@@ -82,7 +81,6 @@ def test_scenario3_top20_rank():                     # criterion #8
 
 
 def test_scenario4_ab_comparison():                  # criterion #9
-    _require_bedrock()
     d, s = _session()
     try:
         doer = scen.Doer(s)
@@ -105,7 +103,6 @@ def test_critic_rejects_weak_chain():                # criterion #10
 
 
 def test_scenario5_shared_sku_validated():
-    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).shared_sku_chain()
@@ -118,7 +115,6 @@ def test_scenario5_shared_sku_validated():
 
 
 def test_scenario6_auto_map_validated():
-    _require_bedrock()
     d, s = _session()
     try:
         chain = scen.Doer(s).auto_map_chain()
