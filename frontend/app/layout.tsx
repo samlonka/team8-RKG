@@ -1,10 +1,20 @@
 import type { Metadata } from "next"
-import { Geist_Mono } from "next/font/google"
+import { Inter, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
+  display: "swap",
+  // Covers light, regular, medium, semibold, bold — all weights used in admin UIs
+  weight: ["300", "400", "500", "600", "700"],
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-mono",
+  subsets: ["latin"],
+  display: "swap",
+  weight: ["400", "500"],
 })
 
 export const metadata: Metadata = {
@@ -25,20 +35,13 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${geistMono.variable} h-full antialiased`}>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Elms+Sans:ital,wght@0,100..900;1,100..900&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body className="min-h-full bg-background text-foreground">{children}</body>
+    <html
+      lang="en"
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full`}
+    >
+      <body className="min-h-full bg-background text-foreground antialiased">
+        {children}
+      </body>
     </html>
   )
 }

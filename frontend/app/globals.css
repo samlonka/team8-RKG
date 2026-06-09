@@ -1,16 +1,20 @@
-@import url("https://fonts.googleapis.com/css2?family=Elms+Sans:ital,wght@0,100..900;1,100..900&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* ── Tailwind theme tokens ──────────────────────────────────────────────────── */
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: "Elms Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono);
-  --font-heading: "Elms Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /* Inter is self-hosted via next/font — no fallback needed beyond system stack */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, "Cascadia Code", monospace;
+  --font-heading: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,85 +53,190 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── Light mode — Professional Indigo ────────────────────────────────────────
+   Primary hue: 265 (indigo-blue, as used by Linear, Vercel, Stripe)
+   Background: near-white with subtle cool tint (not pure white — reduces eye strain)
+   Cards: pure white (pop against background)
+   Sidebar: dark navy — the standard for enterprise admin tools
+─────────────────────────────────────────────────────────────────────────────── */
+
 :root {
-  --font-sans: "Elms Sans", ui-sans-serif, system-ui, sans-serif;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Content surface */
+  --background: oklch(0.972 0.005 258);
+  --foreground: oklch(0.135 0.018 258);
+
+  /* Cards & overlays */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.135 0.018 258);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.135 0.018 258);
+
+  /* Primary — deep indigo */
+  --primary: oklch(0.515 0.255 268);
+  --primary-foreground: oklch(0.99 0 0);
+
+  /* Secondary — washed indigo */
+  --secondary: oklch(0.945 0.014 258);
+  --secondary-foreground: oklch(0.3 0.05 265);
+
+  /* Muted surfaces */
+  --muted: oklch(0.954 0.007 258);
+  --muted-foreground: oklch(0.49 0.022 258);
+
+  /* Accent */
+  --accent: oklch(0.928 0.018 258);
+  --accent-foreground: oklch(0.3 0.05 265);
+
+  /* Destructive — red */
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+
+  /* Borders & inputs */
+  --border: oklch(0.882 0.012 258);
+  --input: oklch(0.882 0.012 258);
+  --ring: oklch(0.515 0.255 268);
+
+  /* Charts */
+  --chart-1: oklch(0.515 0.255 268);
+  --chart-2: oklch(0.64 0.2 220);
+  --chart-3: oklch(0.72 0.18 190);
+  --chart-4: oklch(0.68 0.22 150);
+  --chart-5: oklch(0.62 0.24 30);
+
+  /* Border radius */
+  --radius: 0.5rem;
+
+  /* ── Dark navy sidebar ──
+     Standard for enterprise admin (GitHub, Linear, Datadog, Retool)
+  ──────────────────────────────────────────────────────────────────── */
+  --sidebar: oklch(0.162 0.028 258);
+  --sidebar-foreground: oklch(0.875 0.018 258);
+  --sidebar-primary: oklch(0.515 0.255 268);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.245 0.042 258);
+  --sidebar-accent-foreground: oklch(0.935 0.012 258);
+  --sidebar-border: oklch(0.258 0.04 258);
+  --sidebar-ring: oklch(0.515 0.255 268);
 }
 
+/* ── Dark mode ───────────────────────────────────────────────────────────────── */
+
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: oklch(0.114 0.018 258);
+  --foreground: oklch(0.952 0.01 258);
+
+  --card: oklch(0.162 0.025 258);
+  --card-foreground: oklch(0.952 0.01 258);
+  --popover: oklch(0.162 0.025 258);
+  --popover-foreground: oklch(0.952 0.01 258);
+
+  --primary: oklch(0.645 0.205 268);
+  --primary-foreground: oklch(0.135 0.02 265);
+
+  --secondary: oklch(0.228 0.036 258);
+  --secondary-foreground: oklch(0.9 0.012 258);
+
+  --muted: oklch(0.228 0.032 258);
+  --muted-foreground: oklch(0.622 0.022 258);
+
+  --accent: oklch(0.228 0.036 258);
+  --accent-foreground: oklch(0.9 0.012 258);
+
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.645 0.205 268);
+
+  --chart-1: oklch(0.645 0.205 268);
+  --chart-2: oklch(0.72 0.18 220);
+  --chart-3: oklch(0.76 0.16 190);
+  --chart-4: oklch(0.72 0.2 150);
+  --chart-5: oklch(0.68 0.22 30);
+
+  --sidebar: oklch(0.098 0.018 258);
+  --sidebar-foreground: oklch(0.875 0.018 258);
+  --sidebar-primary: oklch(0.645 0.205 268);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.178 0.03 258);
+  --sidebar-accent-foreground: oklch(0.93 0.012 258);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.645 0.205 268);
 }
+
+/* ── Base typography & rendering ─────────────────────────────────────────────
+   Goals:
+   1. 15px base — standard for information-dense admin tools
+   2. Inter OpenType features — ligatures, alt numerals, clean forms
+   3. Subpixel antialiasing removed in favour of grayscale (crisper on HiDPI)
+   4. Weight hierarchy for headings, labels, data
+─────────────────────────────────────────────────────────────────────────────── */
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-  html,
-  body {
-    font-family: "Elms Sans", ui-sans-serif, system-ui, sans-serif;
+
+  html {
+    font-size: 15px;
+    font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+    /* Inter OpenType features for professional legibility */
+    font-feature-settings: "cv11" 1, "cv08" 1, "ss01" 1, "ss03" 1;
+    font-variant-numeric: tabular-nums;
+
+    /* Crisp rendering on HiDPI and standard displays */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+
+    /* Prevent browsers from synthesising bold/italic (use proper weights instead) */
+    font-synthesis: none;
   }
+
   body {
     @apply bg-background text-foreground;
+    font-size: 0.9375rem; /* 15px — keeps rem-based components proportional */
+    line-height: 1.6;
+  }
+
+  /* ── Heading weight & spacing ─────────────────────────────────────────── */
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    line-height: 1.25;
+  }
+
+  h1 { font-size: 1.875rem; font-weight: 700; letter-spacing: -0.03em; }
+  h2 { font-size: 1.375rem; font-weight: 650; }
+  h3 { font-size: 1.125rem; }
+  h4 { font-size: 1rem; }
+
+  /* ── Strong / labels ──────────────────────────────────────────────────── */
+  strong, b {
+    font-weight: 600;
+  }
+
+  label {
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Monospace (IDs, code, signals) ──────────────────────────────────── */
+  code, kbd, pre, .font-mono {
+    font-family: var(--font-mono), ui-monospace, "Cascadia Code", monospace;
+    font-size: 0.875em;
+    font-feature-settings: normal;
+  }
+
+  /* ── Navigation & UI text — slightly tighter tracking ────────────────── */
+  nav, button, [role="tab"], [role="menuitem"] {
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Input text ───────────────────────────────────────────────────────── */
+  input, textarea, select {
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 400;
   }
 }

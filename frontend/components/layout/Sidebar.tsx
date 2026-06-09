@@ -4,21 +4,11 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { Network, Upload, MessageSquare, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import { useAuthStore } from "@/store/authStore"
 
 const NAV_ITEMS = [
-  {
-    label: "Bulk Upload",
-    href: "/bulk-upload",
-    icon: Upload,
-  },
-  {
-    label: "Chat",
-    href: "/chat",
-    icon: MessageSquare,
-  },
+  { label: "Bulk Upload", href: "/bulk-upload", icon: Upload },
+  { label: "Chat", href: "/chat", icon: MessageSquare },
 ]
 
 export function Sidebar() {
@@ -32,18 +22,20 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-border bg-card">
+    <aside className="flex h-full w-60 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
-      <div className="flex h-16 shrink-0 items-center gap-2 border-b border-border px-5">
+      <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5">
         <div className="flex size-8 items-center justify-center rounded-lg bg-primary">
           <Network className="size-4 text-primary-foreground" />
         </div>
-        <span className="text-base font-semibold tracking-tight">RKG</span>
+        <span className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
+          RKG
+        </span>
       </div>
 
       {/* Navigation */}
-      <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
-        <p className="mb-1 px-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
+        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40">
           Workspace
         </p>
         {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
@@ -53,17 +45,17 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all duration-150",
                 isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               )}
               aria-current={isActive ? "page" : undefined}
             >
               <Icon
                 className={cn(
                   "size-4 shrink-0",
-                  isActive ? "text-primary" : "text-muted-foreground"
+                  isActive ? "text-primary-foreground" : "text-sidebar-foreground/50"
                 )}
               />
               {label}
@@ -72,17 +64,16 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="shrink-0 p-3">
-        <Separator className="mb-3" />
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-3 text-muted-foreground hover:text-destructive"
+      {/* Footer / logout */}
+      <div className="shrink-0 border-t border-sidebar-border px-3 py-3">
+        <button
+          type="button"
           onClick={handleLogout}
+          className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-sidebar-foreground/60 transition-all duration-150 hover:bg-sidebar-accent hover:text-destructive"
         >
           <LogOut className="size-4 shrink-0" />
           Sign Out
-        </Button>
+        </button>
       </div>
     </aside>
   )
